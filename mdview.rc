@@ -1,0 +1,4 @@
+1 ICON "mdview.ico"
+
+#define VER_DESC "mdview Markdown viewer"
+#include "versioninfo.rci"

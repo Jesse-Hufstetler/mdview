@@ -40,26 +40,26 @@
 enum { ID_OPEN = 1, ID_EXIT, ID_RELOAD, ID_COPY, ID_ZOOMIN, ID_ZOOMOUT, ID_ZOOM100, ID_ABOUT,
        ID_COPYALL, ID_SELALL, ID_PASTE,
        ID_THEME_AUTO, ID_THEME_LIGHT, ID_THEME_DARK, ID_CTX_OPEN, ID_CTX_COPYLINK, ID_CTX_COPYCODE, ID_WIDTH,
-       ID_FIND, ID_FINDNEXT, ID_FINDPREV, ID_FINDCLOSE, ID_FINDEDIT, ID_SMOOTH };
+       ID_FIND, ID_FINDNEXT, ID_FINDPREV, ID_FINDCLOSE, ID_FINDEDIT, ID_SMOOTH, ID_CONSOLAS };
 
 /* ---- colours ---- */
 enum { P_TEXT, P_GRAY, P_HEAD, P_CODE, P_BLOCK, P_LINK, P_PAGE, P_INLINEBG, P_BLOCKBG, P_BLOCKBD,
        P_QBAR, P_RULE, P_GRID, P_THEAD, P_ZEBRA,
-       P_KW, P_CTRL, P_STR, P_COM, P_NUM, P_TYPE, P_PRE, P_COUNT };
+       P_KW, P_CTRL, P_STR, P_COM, P_NUM, P_TYPE, P_PRE, P_ATTR, P_DELBG, P_ADDBG, P_KEY, P_COUNT };
 static COLORREF pal[P_COUNT];
 static const COLORREF pal_light[P_COUNT] = {
-    RGB(30, 30, 30), RGB(96, 96, 96), RGB(30, 30, 30), RGB(150, 0, 0), RGB(40, 40, 40), RGB(0, 0, 200),
-    RGB(255, 255, 255), RGB(236, 236, 238), RGB(244, 244, 245), RGB(214, 218, 224), RGB(190, 197, 210),
+    RGB(30, 30, 30), RGB(96, 96, 96), RGB(30, 30, 30), RGB(30, 30, 30), RGB(40, 40, 40), RGB(0, 128, 0),
+    RGB(255, 255, 255), RGB(242, 242, 244), RGB(249, 249, 250), RGB(220, 222, 228), RGB(190, 197, 210),
     RGB(205, 210, 218), RGB(196, 202, 212), RGB(222, 229, 242), RGB(247, 249, 252),
     RGB(0, 0, 255), RGB(143, 8, 196), RGB(163, 21, 21), RGB(0, 128, 0), RGB(9, 134, 88), RGB(43, 145, 175),
-    RGB(128, 128, 128)
+    RGB(128, 128, 128), RGB(229, 0, 0), RGB(255, 208, 208), RGB(208, 238, 208), RGB(4, 81, 165)
 };
 static const COLORREF pal_dark[P_COUNT] = {
-    RGB(215, 215, 218), RGB(150, 152, 158), RGB(215, 215, 218), RGB(255, 150, 125), RGB(215, 215, 218),
-    RGB(110, 170, 255), RGB(30, 30, 32), RGB(58, 58, 63), RGB(40, 40, 44), RGB(72, 72, 80),
+    RGB(215, 215, 218), RGB(150, 152, 158), RGB(215, 215, 218), RGB(215, 215, 218), RGB(215, 215, 218),
+    RGB(110, 200, 110), RGB(30, 30, 32), RGB(46, 46, 50), RGB(35, 35, 38), RGB(62, 62, 70),
     RGB(84, 90, 106), RGB(70, 72, 80), RGB(82, 86, 96), RGB(48, 56, 78), RGB(36, 36, 40),
     RGB(86, 156, 214), RGB(197, 134, 192), RGB(206, 145, 120), RGB(106, 153, 85), RGB(181, 206, 168),
-    RGB(78, 201, 176), RGB(155, 155, 155)
+    RGB(78, 201, 176), RGB(155, 155, 155), RGB(240, 110, 110), RGB(92, 40, 40), RGB(36, 78, 40), RGB(156, 220, 254)
 };
 #define C_TEXT     pal[P_TEXT]
 #define C_GRAY     pal[P_GRAY]
@@ -76,27 +76,35 @@ static const COLORREF pal_dark[P_COUNT] = {
 #define C_GRID     pal[P_GRID]
 #define C_THEAD    pal[P_THEAD]
 #define C_ZEBRA    pal[P_ZEBRA]
-static int g_theme, g_dark, g_limit_width = 0, g_smooth = 1;     /* theme: 0 follow the system, 1 light, 2 dark */
+static int g_theme, g_dark, g_limit_width = 0, g_smooth = 1, g_consolas = 0;     /* theme: 0 follow the system, 1 light, 2 dark */
 static HMENU view_menu;
 #define NOBACK     0xFFFFFFFFUL
 
 /* ---- text model ---- */
 
-enum { F_BOLD = 1, F_ITAL = 2, F_CODE = 4, F_LINK = 8, F_IMG = 16 };
+enum { F_BOLD = 1, F_ITAL = 2, F_CODE = 4, F_LINK = 8, F_IMG = 16, F_BREAK = 32,   /* F_BREAK: a line break (<br>) */
+       F_STRIKE = 64, F_UL = 128, F_SUB = 256, F_SUP = 512, F_MARK = 1024 };
 
 typedef struct { char *text; unsigned flags; int link; } Span;     /* link: 1-based index, 0 = none */
 typedef struct { Span *s; int n, cap; } Inline;
 
-enum { BK_PARA, BK_HEAD, BK_LIST, BK_QUOTE, BK_CODE, BK_TABLE, BK_RULE };
+enum { BK_PARA, BK_HEAD, BK_LIST, BK_QUOTE, BK_CODE, BK_TABLE, BK_RULE, BK_DETAILS };
 
-typedef struct {
+struct Block;
+typedef struct { struct Block *b; int n; } Cell;     /* a table cell: its own little document */
+
+typedef struct Block {
     int kind, level, numbered;
     char num[16];
     Inline inl;                          /* PARA, HEAD, LIST, QUOTE */
     char **lines; int nlines;            /* CODE */
-    Inline *cells; int rows, cols, header; int *align;   /* TABLE: cells[r * cols + c]; align 0/1 centre/2 right */
+    Cell *cells; int rows, cols, header; int *align;     /* TABLE: cells[r * cols + c]; align 0/1 centre/2 right */
     int y;                               /* top of the block in the laid-out document */
     int inset;                           /* PARA, CODE inside a list item: that item's level + 1 */
+    int loose;                           /* LIST: separated from its neighbours by blank lines */
+    int task;                            /* LIST: 1 an open [ ] task, 2 a done [x] one */
+    int halign;                          /* PARA, HEAD: 1 centred, 2 right (from align=".." in HTML) */
+    int did;                             /* DETAILS: index into det_open */
 } Block;
 
 static Block *blocks;
@@ -155,19 +163,25 @@ static void free_inline(Inline *in)
 
 static void free_refs(void);
 
-static void free_doc(void)
+static void free_blocks(Block *bl, int n)
 {
     int i, j;
-    for (i = 0; i < nblocks; i++) {
-        Block *b = &blocks[i];
+    for (i = 0; i < n; i++) {
+        Block *b = &bl[i];
         free_inline(&b->inl);
         for (j = 0; j < b->nlines; j++) free(b->lines[j]);
         free(b->lines);
-        for (j = 0; j < b->rows * b->cols; j++) free_inline(&b->cells[j]);
+        for (j = 0; j < b->rows * b->cols; j++) free_blocks(b->cells[j].b, b->cells[j].n);
         free(b->cells);
         free(b->align);
     }
-    free(blocks);
+    free(bl);
+}
+
+static void free_doc(void)
+{
+    int i;
+    free_blocks(blocks, nblocks);
     blocks = NULL;
     nblocks = capblocks = 0;
     free_refs();
@@ -272,6 +286,52 @@ static const char *match_bracket(const char *open)
 }
 
 static void parse_ex(Inline *out, const char *s, unsigned base, int link);
+static int head_pt(int level);
+static int put_cp(unsigned long cp, char *o);
+
+/* &amp; &copy; &#169; &#xA9;: the length of the entity at p ('&'), and its code point; 0 if it is not one */
+static int entity_at(const char *p, unsigned long *cp)
+{
+    static const struct { const char *n; unsigned long cp; } ent[] = {
+        {"amp", 38}, {"lt", 60}, {"gt", 62}, {"quot", 34}, {"apos", 39}, {"nbsp", 0xA0}, {"copy", 0xA9}, {"reg", 0xAE},
+        {"trade", 0x2122}, {"mdash", 0x2014}, {"ndash", 0x2013}, {"hellip", 0x2026}, {"laquo", 0xAB}, {"raquo", 0xBB},
+        {"lsquo", 0x2018}, {"rsquo", 0x2019}, {"ldquo", 0x201C}, {"rdquo", 0x201D}, {"bull", 0x2022}, {"middot", 0xB7},
+        {"times", 0xD7}, {"divide", 0xF7}, {"deg", 0xB0}, {"plusmn", 0xB1}, {"para", 0xB6}, {"sect", 0xA7}, {"euro", 0x20AC},
+        {"cent", 0xA2}, {"pound", 0xA3}, {"yen", 0xA5}, {"larr", 0x2190}, {"rarr", 0x2192}, {"uarr", 0x2191},
+        {"darr", 0x2193}, {"harr", 0x2194}, {"hearts", 0x2665}, {"infin", 0x221E}, {"ne", 0x2260}, {"le", 0x2264},
+        {"ge", 0x2265}, {"frac12", 0xBD}, {"frac14", 0xBC}, {"frac34", 0xBE}, {"micro", 0xB5}, {"dagger", 0x2020},
+        {"permil", 0x2030}, {NULL, 0}
+    };
+    const char *q = p + 1;
+    int k;
+    if (*q == '#') {
+        int hex = q[1] == 'x' || q[1] == 'X', digits = 0;
+        unsigned long v = 0;
+        q += hex ? 2 : 1;
+        while (digits < 8 && (hex ? isxdigit((unsigned char)*q) : isdigit((unsigned char)*q))) {
+            int d = isdigit((unsigned char)*q) ? *q - '0' : (tolower((unsigned char)*q) - 'a' + 10);
+            v = v * (hex ? 16 : 10) + d;
+            q++; digits++;
+        }
+        if (!digits || *q != ';' || !v || v > 0x10FFFFUL) return 0;
+        *cp = v;
+        return (int)(q + 1 - p);
+    }
+    for (k = 0; ent[k].n; k++) {
+        size_t l = strlen(ent[k].n);
+        if (!strncmp(q, ent[k].n, l) && q[l] == ';') {
+            *cp = ent[k].cp;
+            return (int)(l + 2);
+        }
+    }
+    return 0;
+}
+
+/* <br> inside a paragraph or table cell */
+static void html_break(Inline *out)
+{
+    if (out->n) add_span(out, " ", 1, F_BREAK, 0);
+}
 
 /* link text can hold its own markup (code spans, emphasis) */
 static void add_link_text(Inline *out, const char *t, int n, unsigned base, int link)
@@ -313,30 +373,100 @@ static int html_anchor(const char *p, const char **href, int *hlen, const char *
     return 1;
 }
 
+/* length of a bare URL (http://, https://, www.) starting at p, without trailing punctuation; 0 if none */
+static int bare_url_len(const char *p)
+{
+    int pre = !strnicmp(p, "https://", 8) ? 8 : !strnicmp(p, "http://", 7) ? 7 : !strnicmp(p, "www.", 4) ? 4 : 0;
+    const char *q = p + pre;
+    int n, open = 0;
+    if (!pre) return 0;
+    while (*q && !isspace((unsigned char)*q) && *q != '<' && *q != '`') {
+        if (*q == '(') open++;
+        if (*q == ')') open--;
+        q++;
+    }
+    n = (int)(q - p);
+    while (n > pre) {                                   /* sentence punctuation and emphasis after the URL */
+        char c = p[n - 1];
+        if (c == '.' || c == ',' || c == ';' || c == ':' || c == '!' || c == '?' || c == '\'' || c == '"' || c == '*' || c == '_' ||
+            c == '~' || (c == ')' && open < 0)) {
+            if (c == ')') open++;
+            n--;
+        } else {
+            break;
+        }
+    }
+    return n > pre + 1 ? n : 0;
+}
+
 static void parse_ex(Inline *out, const char *s, unsigned base, int link)
 {
     const char *a_href, *a_inner, *a_after;
     int a_hlen, a_ilen;
     char run[RUNMAX];
     int n = 0, bold = 0, italic = 0, code = 0;
+    unsigned xf = 0;                    /* strike, underline, sub/superscript, mark from ~~ and HTML tags */
+    unsigned long ecp;
+    int el;
     const char *p = s;
 
-#define FLUSH() do {         if (n) {             add_span(out, run, n, base | (bold ? F_BOLD : 0) | (italic ? F_ITAL : 0) | (code ? F_CODE : 0), link);             n = 0;         }     } while (0)
+#define FLUSH() do { if (n) { add_span(out, run, n, base | xf | (bold ? F_BOLD : 0) | (italic ? F_ITAL : 0) | (code ? F_CODE : 0), link); n = 0; } } while (0)
 
     while (*p) {
-        if (n >= RUNMAX - 4) FLUSH();
+        if (n >= RUNMAX - 8) FLUSH();
 
         if (code) {
-            /* inside a code span nothing is special except the closing backtick */
-            if (*p == '`') { FLUSH(); code = 0; p++; }
-            else run[n++] = *p++;
+            /* inside <code> / <kbd> nothing is special except the closing tag */
+            if (*p == '<' && p[1] == '/' && (!strnicmp(p + 2, "code>", 5) || !strnicmp(p + 2, "kbd>", 4))) {
+                FLUSH();
+                code = 0;
+                p = strchr(p, '>') + 1;
+            } else {
+                run[n++] = *p++;
+            }
         } else if (*p == '\\' && p[1] && ispunct((unsigned char)p[1])) {
             run[n++] = p[1];
             p += 2;
         } else if (*p == '`') {
+            int bn = 0, m;
+            const char *q, *cl = NULL;
+            while (p[bn] == '`') bn++;
+            q = p + bn;
+            for (;;) {
+                while (*q && *q != '`') q++;
+                if (!*q) break;
+                for (m = 0; q[m] == '`'; m++) ;
+                if (m == bn) { cl = q; break; }
+                q += m;
+            }
+            if (cl) {                                   /* a code span, closed by a run of the same length */
+                const char *cs = p + bn;
+                int cn = (int)(cl - cs);
+                FLUSH();
+                if (cn > 2 && cs[0] == ' ' && cs[cn - 1] == ' ') { cs++; cn -= 2; }
+                add_span(out, cs, cn, base | xf | (bold ? F_BOLD : 0) | (italic ? F_ITAL : 0) | F_CODE, link);
+                p = cl + bn;
+            } else {                                    /* unmatched backticks are plain text */
+                for (m = 0; m < bn; m++)
+                    if (n < RUNMAX - 1) run[n++] = '`';
+                p += bn;
+            }
+        } else if (*p == '&' && (el = entity_at(p, &ecp)) > 0) {
+            n += put_cp(ecp, run + n);
+            p += el;
+        } else if (*p == '~' && p[1] == '~' && ((xf & F_STRIKE) || (p[2] && p[2] != ' ' && strstr(p + 2, "~~")))) {
             FLUSH();
-            code = 1;
-            p++;
+            xf ^= F_STRIKE;
+            p += 2;
+        } else if (!link && (*p == 'h' || *p == 'H' || *p == 'w' || *p == 'W') && (p == s || !isalnum((unsigned char)p[-1])) &&
+                   bare_url_len(p) > 0) {
+            int ul = bare_url_len(p), www = (p[0] == 'w' || p[0] == 'W');
+            char *u = (char *)malloc(ul + 8);
+            sprintf(u, "%s%.*s", www ? "http://" : "", ul, p);
+            FLUSH();
+            add_span(out, p, ul, base | xf | (bold ? F_BOLD : 0) | (italic ? F_ITAL : 0) | F_LINK, add_link(u, (int)strlen(u)));
+            free(u);
+            p += ul;
         } else if ((*p == '!' && p[1] == '[') || *p == '[') {
             int image = (*p == '!');
             const char *open = p + (image ? 1 : 0);
@@ -409,8 +539,37 @@ static void parse_ex(Inline *out, const char *s, unsigned base, int link)
                 add_span(out, p + 1, len, base | (bold ? F_BOLD : 0) | (italic ? F_ITAL : 0) | F_LINK,
                          add_link(u, (int)strlen(u)));
                 free(u);
-            } else if (!strnicmp(p, "<br", 3) && n && run[n - 1] != ' ') {
-                run[n++] = ' ';
+            } else if (strncmp(p, "<!--", 4)) {
+                const char *nm = p + 1;
+                char name[8];
+                int closing = *nm == '/', k = 0;
+                if (closing) nm++;
+                while (k < 7 && isalnum((unsigned char)nm[k])) { name[k] = (char)tolower((unsigned char)nm[k]); k++; }
+                name[k] = 0;
+                if (!closing && !strcmp(name, "br")) {
+                    FLUSH();
+                    html_break(out);
+                } else {
+                    unsigned bit = 0;
+                    if (!strcmp(name, "u") || !strcmp(name, "ins")) bit = F_UL;
+                    else if (!strcmp(name, "s") || !strcmp(name, "del") || !strcmp(name, "strike")) bit = F_STRIKE;
+                    else if (!strcmp(name, "sub")) bit = F_SUB;
+                    else if (!strcmp(name, "sup")) bit = F_SUP;
+                    else if (!strcmp(name, "mark")) bit = F_MARK;
+                    if (!strcmp(name, "b") || !strcmp(name, "strong")) {
+                        FLUSH();
+                        bold = !closing;
+                    } else if (!strcmp(name, "i") || !strcmp(name, "em")) {
+                        FLUSH();
+                        italic = !closing;
+                    } else if (bit) {
+                        FLUSH();
+                        if (closing) xf &= ~bit; else xf |= bit;
+                    } else if (!closing && (!strcmp(name, "code") || !strcmp(name, "kbd"))) {
+                        FLUSH();
+                        code = 1;
+                    }
+                }
             }
             p = gt + 1;
         } else if (*p == '*' || *p == '_') {
@@ -454,16 +613,25 @@ static char *pend;
 static int pend_len, pend_kind, pend_indent;
 static char pend_num[16];
 static int pend_inset;                  /* a paragraph continuing a list item */
+static int pend_loose;                  /* the list item being collected follows a blank line */
+static int pend_task;                   /* the list item being collected is a task: 1 open, 2 done */
+static int pend_hard;                   /* the last line of the paragraph ended with a hard break */
+static int ord_next[6];                 /* the number the next ordered item gets, per level (0 = start a new list) */
 static int list_ind = -1, list_lvl;     /* content column and level of the latest list item */
 enum { P_NONE, P_PARA, P_QUOTE, P_LIST };
 
 static void append(const char *s)
 {
-    int n;
+    int n, len, hard = 0;
     while (*s == ' ' || *s == '\t') s++;
-    if (pend_len && pend[pend_len - 1] != ' ') pend[pend_len++] = ' ';
-    n = strlen(s);
+    len = (int)strlen(s);
+    n = len;
     while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) n--;
+    if (n > 0 && len - n >= 2) hard = 1;                        /* two spaces at the end of the line */
+    else if (n > 0 && s[n - 1] == '\\' && (n < 2 || s[n - 2] != '\\')) { hard = 1; n--; }     /* or a backslash */
+    if (pend_hard && pend_len) { memcpy(pend + pend_len, "<br>", 4); pend_len += 4; }
+    else if (pend_len && pend[pend_len - 1] != ' ') pend[pend_len++] = ' ';
+    pend_hard = hard && n > 0;
     memcpy(pend + pend_len, s, n);
     pend_len += n;
     pend[pend_len] = 0;
@@ -475,11 +643,25 @@ static void flush(void)
     if (pend_kind == P_NONE) return;
     b = new_block(pend_kind == P_PARA ? BK_PARA : pend_kind == P_QUOTE ? BK_QUOTE : BK_LIST);
     if (pend_kind == P_LIST) {
+        int cont = nblocks > 1 && (blocks[nblocks - 2].kind == BK_LIST || blocks[nblocks - 2].inset), lv;
         b->level = pend_indent / 2 > 5 ? 5 : pend_indent / 2;
         b->numbered = pend_num[0] != 0;
         strcpy(b->num, pend_num);
+        b->loose = pend_loose;
+        pend_loose = 0;
+        if (!cont) memset(ord_next, 0, sizeof(ord_next));
+        if (b->numbered) {                                  /* 1. 1. 1. counts 1. 2. 3. */
+            int v = ord_next[b->level] > 0 ? ord_next[b->level] : atoi(pend_num);
+            sprintf(b->num, "%d", v);
+            ord_next[b->level] = v + 1;
+        } else {
+            ord_next[b->level] = 0;
+        }
+        for (lv = b->level + 1; lv < 6; lv++) ord_next[lv] = 0;
     }
     if (pend_kind == P_PARA) b->inset = pend_inset;
+    if (pend_kind == P_LIST) { b->task = pend_task; pend_task = 0; }
+    pend_hard = 0;
     parse_inline(&b->inl, pend);
     if (b->kind == BK_PARA && b->inl.n == 0) {       /* e.g. a line of only an HTML anchor */
         free_inline(&b->inl);
@@ -511,11 +693,12 @@ static int is_rule(const char *t)
 static const char *list_item(const char *t, char *num)
 {
     num[0] = 0;
-    if ((*t == '-' || *t == '*' || *t == '+') && t[1] == ' ') return t + 2;
+    if ((*t == '-' || *t == '*' || *t == '+') && (t[1] == ' ' || t[1] == '	')) return t + 2;
+    if ((*t == '*' || *t == '+') && !t[1]) return t + 1;          /* a lone marker is an empty item */
     if (isdigit((unsigned char)*t)) {
         int n = 0;
         while (isdigit((unsigned char)t[n])) n++;
-        if (n <= 9 && (t[n] == '.' || t[n] == ')') && t[n + 1] == ' ') {
+        if (n <= 9 && (t[n] == '.' || t[n] == ')') && (t[n + 1] == ' ' || t[n + 1] == '	')) {
             memcpy(num, t, n);
             num[n] = 0;
             return t + n + 2;
@@ -530,19 +713,31 @@ static int split_cells(const char *line, char **out, int max)
     int c = 0;
     const char *p = line;
 
+    while (*p == ' ' || *p == '	') p++;
     if (*p == '|') p++;
     while (*p && c < max) {
         const char *start;
         int n;
         while (*p == ' ') p++;
         start = p;
-        while (*p && *p != '|') p++;
+        while (*p && *p != '|') {
+            if (*p == '\\' && p[1] == '|') p++;              /* \| is a pipe inside the cell */
+            p++;
+        }
         n = (int)(p - start);
         while (n > 0 && start[n - 1] == ' ') n--;
         if (!*p && n == 0) break;                 /* trailing "|" leaves an empty tail */
         out[c] = (char *)malloc(n + 1);
         memcpy(out[c], start, n);
         out[c][n] = 0;
+        {
+            char *w = out[c], *q = out[c];
+            for (; *q; q++) {
+                if (*q == '\\' && q[1] == '|') q++;
+                *w++ = *q;
+            }
+            *w = 0;
+        }
         c++;
         if (*p == '|') p++;
     }
@@ -563,6 +758,35 @@ static int is_separator_cells(char **cells, int n)
 }
 
 #define MAXCOLS 16
+
+static void parse_cell(Cell *c, const char *text);
+
+static int has_pipe(const char *s)
+{
+    for (; *s; s++) {
+        if (*s == '\\' && s[1]) s++;
+        else if (*s == '|') return 1;
+    }
+    return 0;
+}
+
+/* a table whose header row is followed by a delimiter row of the same width; pipes at the ends are optional */
+static int table_starts(char **lines, int i, int nl)
+{
+    char *a[MAXCOLS], *b[MAXCOLS];
+    int na, nb, k, ok;
+    const char *u;
+    if (i + 1 >= nl || !has_pipe(lines[i])) return 0;
+    u = lines[i + 1];
+    while (*u == ' ' || *u == '	') u++;
+    if (!*u) return 0;
+    na = split_cells(lines[i], a, MAXCOLS);
+    nb = split_cells(lines[i + 1], b, MAXCOLS);
+    ok = na > 0 && na == nb && is_separator_cells(b, nb);
+    for (k = 0; k < na; k++) free(a[k]);
+    for (k = 0; k < nb; k++) free(b[k]);
+    return ok;
+}
 
 static void parse_table(char **lines, int first, int count)
 {
@@ -602,10 +826,10 @@ static void parse_table(char **lines, int first, int count)
     b->header = header;
     b->align = (int *)malloc((ncols + 1) * sizeof(int));
     for (c = 0; c < ncols; c++) b->align[c] = align[c];
-    b->cells = (Inline *)calloc(nrows * ncols + 1, sizeof(Inline));
+    b->cells = (Cell *)calloc(nrows * ncols + 1, sizeof(Cell));
     for (r = 0; r < nrows; r++) {
         for (c = 0; c < rowlen[r]; c++) {
-            parse_inline(&b->cells[r * ncols + c], rowcells[r][c]);
+            parse_cell(&b->cells[r * ncols + c], rowcells[r][c]);
             free(rowcells[r][c]);
         }
         free(rowcells[r]);
@@ -627,10 +851,15 @@ static void buf_add(Buf *b, const char *t, int n)
     b->s[b->n] = 0;
 }
 
-/* converts from the opening <ul>/<ol> at q to just past its closing tag */
-static const char *convert_list(Buf *o, const char *q)
+static void md_indent(Buf *o, int n)
 {
-    int depth = 0, ordered[16], count[16];
+    while (n-- > 0) buf_add(o, " ", 1);
+}
+
+/* converts from the opening <ul>/<ol> at q to just past its closing tag; whole: convert everything to the end */
+static const char *convert_list(Buf *o, const char *q, int whole)
+{
+    int depth = 0, ordered[16] = {0}, count[16] = {0}, mark_end = -1, hbold = 0;
     while (*q) {
         if (*q == '<') {
             const char *gt = strchr(q, '>');
@@ -640,24 +869,53 @@ static const char *convert_list(Buf *o, const char *q)
             if (!gt) { buf_add(o, q, 1); q++; continue; }
             while (k < 7 && isalnum((unsigned char)nm[k])) { name[k] = (char)tolower((unsigned char)nm[k]); k++; }
             name[k] = 0;
+            if (!k) { buf_add(o, q, 1); q++; continue; }        /* a bare "<" */
             if (!strcmp(name, "ul") || !strcmp(name, "ol")) {
                 if (!closing) {
                     if (depth < 15) depth++;
                     ordered[depth] = name[0] == 'o';
                     count[depth] = 0;
                 } else if (--depth <= 0) {
+                    depth = 0;
                     buf_add(o, "\n\n", 2);
-                    return gt + 1;
+                    if (!whole) return gt + 1;
                 }
             } else if (!strcmp(name, "li")) {
                 if (!closing) {
                     char mark[16];
                     int ind = depth > 1 ? (depth - 1) * 2 : 0, m;
                     buf_add(o, "\n", 1);
-                    for (m = 0; m < ind; m++) buf_add(o, " ", 1);
+                    md_indent(o, ind);
                     if (ordered[depth > 0 ? depth : 1]) m = sprintf(mark, "%d. ", ++count[depth > 0 ? depth : 1]);
                     else m = sprintf(mark, "- ");
                     buf_add(o, mark, m);
+                    mark_end = o->n;
+                } else if (depth > 0) {
+                    const char *nx = gt + 1;
+                    while (*nx == ' ' || *nx == '\n' || *nx == '\r' || *nx == '\t') nx++;
+                    if (!(nx[0] == '<' && (!strnicmp(nx + 1, "li", 2) || !strnicmp(nx + 1, "/ul", 3) || !strnicmp(nx + 1, "/ol", 3)))) {
+                        buf_add(o, "\n\n", 2);                 /* text after </li> carries on under the item */
+                        md_indent(o, depth * 2);
+                    }
+                }
+            } else if ((name[0] == 'p' && !name[1]) || !strcmp(name, "div") ||
+                       (name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && !name[2])) {
+                if (name[0] == 'h' && closing && hbold) {       /* a heading that opened on a bullet stays on it, in bold */
+                    buf_add(o, "**", 2);
+                    hbold = 0;
+                } else if (closing || mark_end != o->n) {       /* a block of its own, unless it opens right after a bullet */
+                    buf_add(o, "\n\n", 2);
+                    md_indent(o, depth * 2);
+                }
+                if (name[0] == 'h' && !closing) {
+                    if (mark_end == o->n) {
+                        buf_add(o, "**", 2);
+                        hbold = 1;
+                    } else {
+                        int h = name[1] - '0';
+                        while (h--) buf_add(o, "#", 1);
+                        buf_add(o, " ", 1);
+                    }
                 }
             } else if (!strcmp(name, "code")) {
                 buf_add(o, "`", 1);
@@ -669,7 +927,7 @@ static const char *convert_list(Buf *o, const char *q)
                 buf_add(o, q, (int)(gt - q + 1));       /* <a href=..> and friends go to the inline parser */
             }
             q = gt + 1;
-        } else if (*q == '\n' || *q == '\r' || *q == '\t') {
+        } else if (*q == ' ' || *q == '\n' || *q == '\r' || *q == '\t') {
             if (o->n && o->s[o->n - 1] != ' ' && o->s[o->n - 1] != '\n') buf_add(o, " ", 1);
             q++;
         } else {
@@ -694,7 +952,7 @@ static char *html_lists(const char *text)
         if (!strncmp(u, "```", 3) || !strncmp(u, "~~~", 3)) fenced = !fenced;
         if (!fenced && (!strnicmp(u, "<ul", 3) || !strnicmp(u, "<ol", 3)) &&
             (u[3] == '>' || u[3] == ' ' || u[3] == '\r' || u[3] == '\n')) {
-            p = convert_list(&o, u);
+            p = convert_list(&o, u, 0);
             continue;
         }
         buf_add(&o, p, ll);
@@ -703,10 +961,219 @@ static char *html_lists(const char *text)
     return o.s;
 }
 
+static void parse_doc_in(char *text);
+
+/* is there an HTML tag at p ('<') that makes block structure: <ul> <ol> <li> <p> <div> <h1>..<h6> */
+static int block_tag_at(const char *p)
+{
+    char name[8];
+    int k = 0;
+    const char *nm = p + 1 + (p[1] == '/');
+    while (k < 7 && isalnum((unsigned char)nm[k])) { name[k] = (char)tolower((unsigned char)nm[k]); k++; }
+    name[k] = 0;
+    return !strcmp(name, "ul") || !strcmp(name, "ol") || !strcmp(name, "li") || !strcmp(name, "div") ||
+           (name[0] == 'p' && !name[1]) || (name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && !name[2]);
+}
+
+/* parse md (modified in place) as a document of its own into c, keeping the state of the document being parsed */
+static void parse_nested(Cell *c, char *md)
+{
+    Block *sb_blocks = blocks;
+    int sb_n = nblocks, sb_cap = capblocks, sb_plen = pend_len, sb_kind = pend_kind, sb_ind = pend_indent;
+    int sb_inset = pend_inset, sb_lind = list_ind, sb_llvl = list_lvl;
+    char *sb_pend = pend, sb_num[16];
+    memcpy(sb_num, pend_num, sizeof(sb_num));
+    blocks = NULL; nblocks = capblocks = 0;
+    parse_doc_in(md);
+    c->b = blocks; c->n = nblocks;
+    blocks = sb_blocks; nblocks = sb_n; capblocks = sb_cap;
+    pend = sb_pend; pend_len = sb_plen; pend_kind = sb_kind; pend_indent = sb_ind;
+    pend_inset = sb_inset; list_ind = sb_lind; list_lvl = sb_llvl;
+    memcpy(pend_num, sb_num, sizeof(sb_num));
+}
+
+static int has_block_tag(const char *text)
+{
+    const char *p;
+    for (p = text; *p; p++)
+        if (*p == '<' && block_tag_at(p)) return 1;
+    return 0;
+}
+
+/* Markdown whose HTML blocks (<p> <ul> <h2> ..) are rewritten as Markdown, parsed as a document of its own */
+static void parse_body(Cell *c, const char *text)
+{
+    char *md;
+    if (has_block_tag(text)) {
+        Buf o;
+        memset(&o, 0, sizeof(o));
+        convert_list(&o, text, 1);
+        md = o.s;
+    } else {
+        md = (char *)malloc(strlen(text) + 1);
+        strcpy(md, text);
+    }
+    if (md) {
+        parse_nested(c, md);
+        free(md);
+    }
+}
+
+/* a cell with plain text is one paragraph; one with <ul>, <p>, <h2>.. is parsed like a document of its own */
+static void parse_cell(Cell *c, const char *text)
+{
+    if (has_block_tag(text)) parse_body(c, text);
+    if (!c->n) {
+        free(c->b);
+        c->b = (Block *)calloc(1, sizeof(Block));
+        c->b->kind = BK_PARA;
+        c->n = 1;
+        parse_inline(&c->b->inl, text);
+    }
+}
+
+static int ph_enc(unsigned long cp, char *o);
+static int nph;
+
+#define MAXDET 1024
+static char det_open[MAXDET];           /* which <details> are open, by Block.did */
+static int ndet;
+
+/* the "</name" that closes the element whose opening tag has just been read */
+static const char *matching_close(const char *s, const char *name)
+{
+    size_t n = strlen(name);
+    int depth = 1;
+    for (; *s; s++) {
+        if (*s != '<') continue;
+        if (s[1] == '/' && !strnicmp(s + 2, name, n) && !isalnum((unsigned char)s[2 + n])) {
+            if (--depth == 0) return s;
+        } else if (!strnicmp(s + 1, name, n) && !isalnum((unsigned char)s[1 + n])) {
+            depth++;
+        }
+    }
+    return NULL;
+}
+
+/* <details>..</details>, and <p>/<div>/<center>/<h1>.. with align="center|right", starting at line i.
+   Returns the last line used, or -1 if the line starts neither (nothing is changed then). */
+static int html_block(char **lines, int i, int nl)
+{
+    const char *t = lines[i], *gt, *close = NULL, *body;
+    char name[8];
+    int k = 0, j, align = 0, details, hn, open = 0;
+    Buf all;
+    Cell c;
+
+    while (*t == ' ' || *t == '\t') t++;
+    if (*t != '<') return -1;
+    while (k < 7 && isalnum((unsigned char)t[1 + k])) { name[k] = (char)tolower((unsigned char)t[1 + k]); k++; }
+    name[k] = 0;
+    details = !strcmp(name, "details");
+    hn = name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && !name[2];
+    if (!details && strcmp(name, "p") && strcmp(name, "div") && strcmp(name, "center") && !hn) return -1;
+    gt = strchr(t, '>');
+    if (!gt) return -1;
+    if (details) {
+        const char *a;
+        for (a = t + 8; a < gt; a++) if (!strnicmp(a, "open", 4)) open = 1;
+    } else if (!strcmp(name, "center")) {
+        align = 1;
+    } else {
+        const char *a;
+        for (a = t; a < gt; a++)
+            if (!strnicmp(a, "align=", 6)) {
+                a += 6;
+                if (*a == '"' || *a == '\'') a++;
+                align = !strnicmp(a, "center", 6) ? 1 : !strnicmp(a, "right", 5) ? 2 : 0;
+                break;
+            }
+        if (!align) return -1;
+    }
+
+    memset(&all, 0, sizeof(all));
+    for (j = i; j < nl; j++) {                                  /* join lines until the element closes */
+        const char *u = j == i ? t : lines[j];
+        buf_add(&all, u, (int)strlen(u));
+        buf_add(&all, "\n", 1);
+        close = matching_close(strchr(all.s, '>') + 1, name);
+        if (close) break;
+    }
+    if (!close) { free(all.s); return -1; }
+    body = strchr(all.s, '>') + 1;
+    flush();
+    list_ind = -1;
+    memset(&c, 0, sizeof(c));
+
+    {
+        char *inner = (char *)malloc(close - body + 8 + 1), *pre = inner;
+        Block *b;
+        memcpy(inner, body, (size_t)(close - body));
+        inner[close - body] = 0;
+        if (details) {
+            const char *sp = NULL, *q, *sgt, *sc;
+            char *sum, *rest;
+            int link, tri;
+            char url[32], mark[8];
+            for (q = inner; *q && !sp; q++)
+                if (q[0] == '<' && !strnicmp(q + 1, "summary", 7) && !isalnum((unsigned char)q[8])) sp = q;
+            sgt = sp ? strchr(sp, '>') : NULL;
+            sc = sgt ? matching_close(sgt + 1, "summary") : NULL;
+            sum = (char *)malloc(strlen(inner) + 16);
+            rest = (char *)malloc(strlen(inner) + 16);
+            if (sc) {
+                memcpy(sum, sgt + 1, (size_t)(sc - sgt - 1));
+                sum[sc - sgt - 1] = 0;
+                memcpy(rest, inner, (size_t)(sp - inner));
+                strcpy(rest + (sp - inner), strchr(sc, '>') ? strchr(sc, '>') + 1 : "");
+            } else {
+                strcpy(sum, "Details");
+                strcpy(rest, inner);
+            }
+            parse_body(&c, rest);
+            b = new_block(BK_DETAILS);
+            b->did = ndet < MAXDET ? ndet : MAXDET - 1;
+            ndet++;
+            det_open[b->did] = (char)open;
+            sprintf(url, "mdview:details:%d", b->did);
+            link = add_link(url, (int)strlen(url));
+            tri = ph_enc(0x25B6, mark);
+            nph = 1;
+            add_span(&b->inl, mark, tri, 0, link);              /* the triangle, redrawn to match the state in the layout */
+            add_span(&b->inl, " ", 1, 0, link);
+            parse_ex(&b->inl, sum, 0, link);
+            b->cells = (Cell *)malloc(sizeof(Cell));
+            b->cells[0] = c;
+            b->rows = b->cols = 1;
+            free(sum);
+            free(rest);
+        } else {
+            if (hn) {                                           /* <h1 align="center">Title</h1> */
+                int h = name[1] - '0';
+                pre = inner + 8;
+                memmove(pre, inner, strlen(inner) + 1);
+                memset(inner, '#', h);
+                inner[h] = ' ';
+                memmove(inner + h + 1, pre, strlen(pre) + 1);
+            }
+            parse_body(&c, inner);
+            for (k = 0; k < c.n; k++) {                         /* its blocks join the document, aligned */
+                b = new_block(c.b[k].kind);
+                *b = c.b[k];
+                if (b->kind == BK_PARA || b->kind == BK_HEAD) b->halign = align;
+            }
+            free(c.b);
+        }
+        free(inner);
+    }
+    free(all.s);
+    return j;
+}
+
 static void parse_doc_in(char *text)
 {
     char **lines, *p;
-    int nl = 1, i;
+    int nl = 1, i, was_blank = 0, prev_blank = 0;
     size_t total = strlen(text);        /* before the splitting below NULs the newlines */
 
     for (p = text; *p; p++)
@@ -735,7 +1202,8 @@ static void parse_doc_in(char *text)
         }
     }
 
-    pend = (char *)malloc(total + 64);
+    pend = (char *)malloc(total * 3 + 64);                 /* hard breaks add a <br> per line */
+    pend_hard = 0;
     list_ind = -1;
     pend_inset = 0;
     pend_len = 0;
@@ -753,6 +1221,8 @@ static void parse_doc_in(char *text)
             t++;
         }
 
+        was_blank = prev_blank;
+        prev_blank = !*t;
         if (!strncmp(t, "```", 3) || !strncmp(t, "~~~", 3)) {
             int j = i + 1, k;
             Block *b;
@@ -776,8 +1246,11 @@ static void parse_doc_in(char *text)
             b->nlines = j - (i + 1);
             b->lines = (char **)malloc((b->nlines + 1) * sizeof(char *));
             for (k = 0; k < b->nlines; k++) {
-                b->lines[k] = (char *)malloc(strlen(lines[i + 1 + k]) + 1);
-                strcpy(b->lines[k], lines[i + 1 + k]);
+                const char *u = lines[i + 1 + k];
+                int w = 0;
+                while ((*u == ' ' || *u == '\t') && w < ind) { w += *u == '\t' ? 4 : 1; u++; }
+                b->lines[k] = (char *)malloc(strlen(u) + 1);
+                strcpy(b->lines[k], u);
             }
             i = j;                       /* skip past the closing fence */
             continue;
@@ -786,10 +1259,14 @@ static void parse_doc_in(char *text)
             flush();
             continue;
         }
-        if (list_ind >= 0 && pend_kind == P_NONE && ind >= list_ind && *t != '#' && *t != '|' && *t != '>' &&
+        if (*t == '<') {
+            int e = html_block(lines, i, nl);
+            if (e >= 0) { i = e; continue; }
+        }
+        if (pend_kind == P_NONE && ind >= (list_ind >= 0 ? list_ind : 4) && *t != '#' && *t != '|' && *t != '>' &&
             !is_rule(t) && !list_item(t, num)) {
-            if (ind >= list_ind + 4) {                      /* indented code inside a list item */
-                int j = i, k, strip = list_ind + 4, last = i;
+            if (ind >= (list_ind >= 0 ? list_ind : 0) + 4) {        /* indented code, also inside a list item */
+                int j = i, k, strip = (list_ind >= 0 ? list_ind : 0) + 4, last = i;
                 Block *b;
                 while (j < nl) {
                     const char *u = lines[j];
@@ -802,7 +1279,7 @@ static void parse_doc_in(char *text)
                     j++;
                 }
                 b = new_block(BK_CODE);
-                b->inset = list_lvl + 1;
+                b->inset = list_ind >= 0 ? list_lvl + 1 : 0;
                 b->nlines = last - i + 1;
                 b->lines = (char **)malloc((b->nlines + 1) * sizeof(char *));
                 for (k = 0; k < b->nlines; k++) {
@@ -860,32 +1337,73 @@ static void parse_doc_in(char *text)
             new_block(BK_RULE);
             continue;
         }
-        if (*t == '|') {
-            int j = i;
+        if (*t == '|' || (pend_kind == P_NONE && table_starts(lines, i, nl))) {
+            int j = i, tin = (list_ind >= 0 && ind >= list_ind) ? list_lvl + 1 : 0;
             flush();
-            list_ind = -1;
+            if (!tin) list_ind = -1;
             while (j < nl) {
                 const char *u = lines[j];
                 while (*u == ' ' || *u == '\t') u++;
-                if (*u != '|') break;
+                if (*u != '|' && !has_pipe(u)) break;
                 j++;
             }
             parse_table(lines, i, j - i);
+            if (tin && nblocks > 0) blocks[nblocks - 1].inset = tin;
             i = j - 1;
             continue;
         }
         if (*t == '>') {
-            if (pend_kind != P_QUOTE) flush();
-            list_ind = -1;
-            pend_kind = P_QUOTE;
-            t++;
-            if (*t == ' ') t++;
-            if (*t) append(t);
+            Buf qb;
+            Cell qc;
+            Block *qbk;
+            char qnum[16];
+            int j = i, prev_blank = 1;
+            int qin = (list_ind >= 0 && ind >= list_ind) ? list_lvl + 1 : 0;     /* quoted inside a list item */
+            flush();
+            if (!qin) list_ind = -1;
+            memset(&qb, 0, sizeof(qb));
+            memset(&qc, 0, sizeof(qc));
+            while (j < nl) {                                /* the quote's lines, with the "> " taken off */
+                const char *u = lines[j];
+                while (*u == ' ' || *u == '\t') u++;
+                if (*u == '>') {
+                    u++;
+                    if (*u == ' ') u++;
+                    buf_add(&qb, u, (int)strlen(u));
+                    buf_add(&qb, "\n", 1);
+                    prev_blank = !*u;
+                } else if (*u && !prev_blank && *u != '#' && *u != '|' && strncmp(u, "```", 3) && strncmp(u, "~~~", 3) &&
+                           !is_rule(u) && !list_item(u, qnum)) {        /* a lazy continuation line */
+                    buf_add(&qb, u, (int)strlen(u));
+                    buf_add(&qb, "\n", 1);
+                } else {
+                    break;
+                }
+                j++;
+            }
+            if (qb.s) parse_nested(&qc, qb.s);
+            qbk = new_block(BK_QUOTE);
+            qbk->inset = qin;
+            qbk->cells = (Cell *)malloc(sizeof(Cell));
+            qbk->cells[0] = qc;
+            qbk->rows = qbk->cols = 1;
+            free(qb.s);
+            i = j - 1;
             continue;
         }
         item = list_item(t, num);
         if (item) {
             flush();
+            pend_loose = 0;
+            if (was_blank && nblocks > 0 && (blocks[nblocks - 1].kind == BK_LIST || blocks[nblocks - 1].inset)) {
+                blocks[nblocks - 1].loose = 1;               /* blank lines between items make the list loose */
+                pend_loose = 1;
+            }
+            pend_task = 0;
+            if (item[0] == '[' && (item[1] == ' ' || item[1] == 'x' || item[1] == 'X') && item[2] == ']' && (item[3] == ' ' || !item[3])) {
+                pend_task = item[1] == ' ' ? 1 : 2;             /* - [ ] a task */
+                item += item[3] ? 4 : 3;
+            }
             pend_kind = P_LIST;
             pend_indent = ind;
             list_ind = ind + (int)(item - t);
@@ -896,7 +1414,7 @@ static void parse_doc_in(char *text)
             append(item);
             continue;
         }
-        if (pend_kind == P_LIST || pend_kind == P_QUOTE) {
+        if (pend_kind == P_LIST) {
             append(t);               /* continuation of the current item */
             continue;
         }
@@ -916,6 +1434,7 @@ static void parse_doc_in(char *text)
 static void parse_doc(char *text)
 {
     char *c = html_lists(text);
+    ndet = 0;
     parse_doc_in(c ? c : text);
     free(c);
 }
@@ -928,9 +1447,10 @@ static int g_dpi = 96, g_zoom = 100;
 static int g_nt, g_uni;               /* running on NT; Unicode text APIs usable */
 
 static int PX(int pt) { return MulDiv(pt, g_dpi * g_zoom * 8 / 11, 7200); }
+#define CODE_PX PX(12)                  /* the monospace size, for code blocks and inline code */
 static int S(int n)   { return MulDiv(n, g_dpi * g_zoom * 8 / 11, 9600); }
 
-typedef struct { int px, b, i, m, u; HFONT h; int asc, ht, spw; int cw[256]; int pw[32]; } FontEnt;
+typedef struct { int px, b, i, m, u; HFONT h; int asc, ht, spw; int cw[256]; struct { unsigned long cp; int w; } pwc[128]; } FontEnt;
 static FontEnt fonts[128];
 static int nfonts;
 
@@ -948,17 +1468,28 @@ static int font_get(int px, int b, int i, int m, int u)
             return k;
     if (nfonts >= 128) return 0;
     f = &fonts[nfonts];
-    memset(f->pw, 0, sizeof(f->pw));
+    memset(f->pwc, 0, sizeof(f->pwc));
     memset(&lf, 0, sizeof(lf));
     lf.lfHeight = -px;
     lf.lfWeight = b ? FW_BOLD : FW_NORMAL;
     lf.lfItalic = (BYTE)i;
-    lf.lfUnderline = (BYTE)u;
+    lf.lfUnderline = (BYTE)(u & 1);
+    lf.lfStrikeOut = (BYTE)((u & 2) != 0);
     lf.lfCharSet = ANSI_CHARSET;
     lf.lfQuality = 5;                   /* CLEARTYPE_QUALITY: smooth at every size (older Windows ignores it) */
     lf.lfPitchAndFamily = m ? (FIXED_PITCH | FF_MODERN) : (VARIABLE_PITCH | FF_SWISS);
-    strcpy(lf.lfFaceName, m ? "Courier New" : "Arial");
+    strcpy(lf.lfFaceName, m && g_consolas ? "Consolas" : m ? "Courier New" : "Arial");
     f->h = CreateFontIndirect(&lf);
+    if (m && g_consolas) {              /* the View option: Consolas where installed (Vista and up), else Courier New */
+        char face[LF_FACESIZE];
+        SelectObject(mdc, f->h);
+        GetTextFace(mdc, LF_FACESIZE, face);
+        if (lstrcmpi(face, "Consolas")) {
+            DeleteObject(f->h);
+            strcpy(lf.lfFaceName, "Courier New");
+            f->h = CreateFontIndirect(&lf);
+        }
+    }
     f->px = px; f->b = b; f->i = i; f->m = m; f->u = u;
     SelectObject(mdc, f->h);
     GetTextMetrics(mdc, &tm);
@@ -990,41 +1521,96 @@ typedef BOOL (WINAPI *PEXTOUTW)(HDC, int, int, UINT, const RECT *, const wchar_t
 typedef BOOL (WINAPI *PTEXTENTW)(HDC, const wchar_t *, int, LPSIZE);
 static PEXTOUTW pExtTextOutW;
 static PTEXTENTW pGetTextExtentPoint32W;
-static unsigned long ph_cp[32];
-static int nph;
+/* A symbol is 4 bytes in the text: PH_LEAD, then the code point in three 7-bit groups, each with its top bit set */
+#define PH_LEAD 0x1F
+static int nph;                         /* symbols seen in this document */
+
+static int ph_unit(const char *s, int len, unsigned long *cp)      /* bytes taken by the char at s; *cp = its code point, or 0 */
+{
+    *cp = 0;
+    if (s[0] == PH_LEAD && len >= 4 && ((unsigned char)s[1] & 0x80) && ((unsigned char)s[2] & 0x80) && ((unsigned char)s[3] & 0x80)) {
+        *cp = ((unsigned long)((unsigned char)s[1] & 0x7F) << 14) | ((unsigned long)((unsigned char)s[2] & 0x7F) << 7) |
+              ((unsigned char)s[3] & 0x7F);
+        return 4;
+    }
+    return 1;
+}
+
+static int ph_enc(unsigned long cp, char *o)
+{
+    o[0] = PH_LEAD;
+    o[1] = (char)(0x80 | ((cp >> 14) & 0x7F));
+    o[2] = (char)(0x80 | ((cp >> 7) & 0x7F));
+    o[3] = (char)(0x80 | (cp & 0x7F));
+    return 4;
+}
 
 typedef struct { int px, emoji; HFONT h; } SymFont;
 static SymFont symfonts[48];
 static int nsym;
 
+/* Win9x has no Unicode text APIs: common symbols are drawn with the Wingdings (face 0) and Symbol (face 1) fonts instead */
+typedef struct { unsigned long cp; unsigned char face, ch; } SymMap;
+static const SymMap symmap[] = {
+    {0x2190,0,0xDF},{0x2192,0,0xE0},{0x2191,0,0xE1},{0x2193,0,0xE2},{0x2196,0,0xE3},{0x2197,0,0xE4},{0x2199,0,0xE5},{0x2198,0,0xE6},
+    {0x2B05,0,0xE7},{0x27A1,0,0xE8},{0x2B06,0,0xE9},{0x2B07,0,0xEA},{0x2B09,0,0xEB},{0x2B08,0,0xEC},{0x2B0B,0,0xED},{0x2B0A,0,0xEE},
+    {0x21E6,0,0xEF},{0x21E8,0,0xF0},{0x21E7,0,0xF1},{0x21E9,0,0xF2},{0x2194,0,0xF3},{0x21D4,0,0xF3},{0x2195,0,0xF4},
+    {0x2713,0,0xFC},{0x2714,0,0xFC},{0x2705,0,0xFE},{0x2611,0,0xFE},{0x2717,0,0xFB},{0x2718,0,0xFB},{0x2716,0,0xFB},{0x274C,0,0xFB},
+    {0x2612,0,0xFD},{0x2610,0,0xA8},{0x2B50,0,0xAB},{0x2605,0,0xAB},{0x2606,0,0xB6},{0x272A,0,0xB5},
+    {0x263A,0,0x4A},{0x1F600,0,0x4A},{0x1F642,0,0x4A},{0x1F60A,0,0x4A},{0x1F603,0,0x4A},{0x1F604,0,0x4A},{0x1F601,0,0x4A},
+    {0x1F610,0,0x4B},{0x2639,0,0x4C},{0x1F641,0,0x4C},{0x2620,0,0x4E},{0x2708,0,0x51},{0x2600,0,0x52},{0x2744,0,0x54},{0x271D,0,0x55},
+    {0x260E,0,0x28},{0x2709,0,0x2A},{0x231B,0,0x36},{0x2328,0,0x37},{0x1F4BE,0,0x3C},{0x1F4BB,0,0x3A},{0x2702,0,0x22},{0x270F,0,0x21},
+    {0x1F514,0,0x25},{0x1F4D6,0,0x26},{0x1F4C1,0,0x30},{0x1F4C2,0,0x31},{0x1F4C4,0,0x32},{0x270C,0,0x41},{0x1F44D,0,0x43},
+    {0x1F44E,0,0x44},{0x1F448,0,0x45},{0x1F449,0,0x46},{0x1F446,0,0x47},{0x1F447,0,0x48},{0x2691,0,0x4F},{0x2318,0,0x7A},
+    {0x25CF,0,0x6C},{0x25CB,0,0xA1},{0x25A0,0,0x6E},{0x25A1,0,0x6F},{0x25C6,0,0x75},{0x2756,0,0x76},
+    {0x25B6,0,0xD8},{0x25B8,0,0xD8},{0x25BA,0,0xD8},{0x25BC,0,0xDA},{0x25BE,0,0xDA},
+    {0x2665,1,0xA9},{0x2764,1,0xA9},{0x2663,1,0xA7},{0x2666,1,0xA8},{0x2660,1,0xAA},{0x221E,1,0xA5},{0x2260,1,0xB9},{0x2264,1,0xA3},
+    {0x2265,1,0xB3},{0x2248,1,0xBB},{0x221A,1,0xD6},{0x2211,1,0xE5},{0x222B,1,0xF2},{0x03C0,1,0x70},{0x03B1,1,0x61},{0x03B2,1,0x62},
+    {0x03B3,1,0x67},{0x03B4,1,0x64},{0x03BB,1,0x6C},{0x03A9,1,0x57},{0x2202,1,0xB6},{0x2206,1,0x44},{0x00D7,1,0xB4}
+};
+
+/* DOS box and block drawing (OEM code page 437, face 2: Courier New) */
+static const struct { unsigned short cp; unsigned char ch; } oemmap[] = {
+    {0x2500,0xC4},{0x2502,0xB3},{0x250C,0xDA},{0x2510,0xBF},{0x2514,0xC0},{0x2518,0xD9},{0x251C,0xC3},{0x2524,0xB4},
+    {0x252C,0xC2},{0x2534,0xC1},{0x253C,0xC5},{0x2550,0xCD},{0x2551,0xBA},{0x2554,0xC9},{0x2557,0xBB},{0x255A,0xC8},
+    {0x255D,0xBC},{0x2560,0xCC},{0x2563,0xB9},{0x2566,0xCB},{0x2569,0xCA},{0x256C,0xCE},{0x256D,0xDA},{0x256E,0xBF},
+    {0x2570,0xC0},{0x256F,0xD9},{0x2588,0xDB},{0x2584,0xDC},{0x2580,0xDF},{0x258C,0xDD},{0x2590,0xDE},{0x2591,0xB0},
+    {0x2592,0xB1},{0x2593,0xB2}
+};
+
+/* Ukrainian letters outside the main block, in code page 1251 (face 3: Arial, Cyrillic) */
+static const struct { unsigned short cp; unsigned char ch; } cyrmap[] = {
+    {0x401,0xA8},{0x451,0xB8},{0x404,0xAA},{0x454,0xBA},{0x406,0xB2},{0x456,0xB3},{0x407,0xAF},{0x457,0xBF},{0x490,0xA5},{0x491,0xB4}
+};
+
+static const SymMap *sym_lookup(unsigned long cp)
+{
+    static SymMap tmp;
+    unsigned k;
+    for (k = 0; k < sizeof(symmap) / sizeof(symmap[0]); k++)
+        if (symmap[k].cp == cp) return &symmap[k];
+    tmp.cp = cp;
+    for (k = 0; k < sizeof(oemmap) / sizeof(oemmap[0]); k++)
+        if (oemmap[k].cp == cp) { tmp.face = 2; tmp.ch = oemmap[k].ch; return &tmp; }
+    if (cp >= 0x410 && cp <= 0x44F) { tmp.face = 3; tmp.ch = (unsigned char)(cp - 0x410 + 0xC0); return &tmp; }
+    for (k = 0; k < sizeof(cyrmap) / sizeof(cyrmap[0]); k++)
+        if (cyrmap[k].cp == cp) { tmp.face = 3; tmp.ch = cyrmap[k].ch; return &tmp; }
+    return NULL;
+}
+
 static void ph_init(void)
 {
+
     HMODULE g = GetModuleHandle("gdi32.dll");
     pExtTextOutW = (PEXTOUTW)GetProcAddress(g, "ExtTextOutW");
     pGetTextExtentPoint32W = (PTEXTENTW)GetProcAddress(g, "GetTextExtentPoint32W");
     g_uni = g_nt && pExtTextOutW && pGetTextExtentPoint32W;
 }
 
-static int ph_get(unsigned long cp)
-{
-    int c, freec = 0;
-    for (c = 1; c < 32; c++) {
-        if (c >= 9 && c <= 13) continue;
-        if (ph_cp[c] == cp) return c;
-        if (!ph_cp[c] && !freec) freec = c;
-    }
-    if (!freec) return 0;
-    ph_cp[freec] = cp;
-    nph++;
-    return freec;
-}
 
 static void ph_reset(void)
 {
-    int k;
-    memset(ph_cp, 0, sizeof(ph_cp));
     nph = 0;
-    for (k = 0; k < nfonts; k++) memset(fonts[k].pw, 0, sizeof(fonts[k].pw));
 }
 
 static int wide_of(unsigned long cp, wchar_t *w)
@@ -1039,19 +1625,23 @@ static int wide_of(unsigned long cp, wchar_t *w)
     return 1;
 }
 
+static int emoji_color(unsigned long cp);
+
 static HFONT sym_font(int px, unsigned long cp)
 {
-    int k, emoji = cp >= 0x1F000 || (cp >= 0x2300 && cp <= 0x23FF) || (cp >= 0x2600 && cp <= 0x27BF) ||
-                   (cp >= 0x2B00 && cp <= 0x2BFF);
+    int k, emoji = emoji_color(cp);
     LOGFONT lf;
+    const SymMap *sm = g_uni ? NULL : sym_lookup(cp);
+    if (!emoji && cp >= 0x100 && cp < 0x590) emoji = 4;           /* Latin, Greek, Cyrillic: Arial has them, Segoe UI Symbol does not */
+    if (sm) emoji = 10 + sm->face;
     for (k = 0; k < nsym; k++)
         if (symfonts[k].px == px && symfonts[k].emoji == emoji) return symfonts[k].h;
     memset(&lf, 0, sizeof(lf));
     lf.lfHeight = -px;
     lf.lfWeight = FW_NORMAL;
-    lf.lfCharSet = DEFAULT_CHARSET;
+    lf.lfCharSet = !sm ? DEFAULT_CHARSET : sm->face == 2 ? OEM_CHARSET : sm->face == 3 ? RUSSIAN_CHARSET : SYMBOL_CHARSET;
     lf.lfQuality = 5;
-    strcpy(lf.lfFaceName, emoji ? "Segoe UI Emoji" : "Segoe UI Symbol");
+    strcpy(lf.lfFaceName, sm ? (sm->face == 3 ? "Arial" : sm->face == 2 ? "Courier New" : sm->face ? "Symbol" : "Wingdings") : emoji == 4 ? "Arial" : emoji ? "Segoe UI Emoji" : "Segoe UI Symbol");
     if (nsym == 48) {
         DeleteObject(symfonts[0].h);
         memmove(symfonts, symfonts + 1, 47 * sizeof(SymFont));
@@ -1062,20 +1652,25 @@ static HFONT sym_font(int px, unsigned long cp)
     return symfonts[nsym++].h;
 }
 
-static int ph_width(int fnt, int c)
+static int ph_width(int fnt, unsigned long cp)
 {
     FontEnt *f = &fonts[fnt];
-    if (!ph_cp[c]) return f->cw[c];
-    if (!f->pw[c]) {
+    int slot = (int)((cp ^ (cp >> 7)) & 127);
+    if (f->pwc[slot].cp != cp) {
         wchar_t w[2];
         SIZE sz;
-        int n = wide_of(ph_cp[c], w);
-        HGDIOBJ old = SelectObject(mdc, sym_font(f->px, ph_cp[c]));
-        if (!pGetTextExtentPoint32W(mdc, w, n, &sz)) sz.cx = f->px;
+        int n = wide_of(cp, w);
+        HGDIOBJ old = SelectObject(mdc, sym_font(f->px, cp));
+        if (!g_uni) {
+            const SymMap *sm2 = sym_lookup(cp);
+            char ch = sm2 ? (char)sm2->ch : '?';
+            if (!GetTextExtentPoint32(mdc, &ch, 1, &sz)) sz.cx = f->px;
+        } else if (!pGetTextExtentPoint32W(mdc, w, n, &sz)) sz.cx = f->px;
         SelectObject(mdc, old);
-        f->pw[c] = sz.cx > 0 ? sz.cx : f->px;
+        f->pwc[slot].cp = cp;
+        f->pwc[slot].w = sz.cx > 0 ? sz.cx : f->px;
     }
-    return f->pw[c];
+    return f->pwc[slot].w;
 }
 
 /* text width: the sum of the font's glyph advances (GDI does no kerning), no GDI call per word */
@@ -1083,9 +1678,21 @@ static int text_w(int fnt, const char *s, int len)
 {
     const int *cw = fonts[fnt].cw;
     int w = 0;
-    while (len-- > 0) {
-        unsigned char c = (unsigned char)*s++;
-        w += c < 32 ? ph_width(fnt, c) : cw[c];
+    while (len > 0) {
+        unsigned char c = (unsigned char)*s;
+        if (nph && c == PH_LEAD) {
+            unsigned long cp;
+            int u = ph_unit(s, len, &cp);
+            if (cp) {
+                w += ph_width(fnt, cp);
+                s += u;
+                len -= u;
+                continue;
+            }
+        }
+        w += cw[c];
+        s++;
+        len--;
     }
     return w;
 }
@@ -1140,7 +1747,7 @@ static void rect(int x, int y, int w, int h, COLORREF col)
 }
 
 /* a fenced code block's box and its Copy button */
-typedef struct { int x, y, w, h, bx, by, bw, bh, font, blk, hs, hmax, it0, it1; } CodeBox;   /* hs: horizontal scroll, hmax: how far it goes */
+typedef struct { int x, y, w, h, bx, by, bw, bh, font, hs, hmax, it0, it1; const Block *blk; } CodeBox;   /* hs: horizontal scroll, hmax: how far it goes */
 static CodeBox *cboxes;
 static int ncboxes, capcboxes;
 static int find_valid, find_visible;                    /* Find: text cache matches the items; panel shown */
@@ -1150,7 +1757,7 @@ static DWORD as_t, as_t0;
 static int sb_drag = -1, sb_grab;                        /* a code block's scrollbar thumb being dragged */
 static int hot_box = -1, btn_hot, copied_box = -1;      /* box under the mouse, button hovered, box just copied */
 
-static CodeBox *add_cbox(int x, int y, int w, int h, int blk)
+static CodeBox *add_cbox(int x, int y, int w, int h, const Block *blk)
 {
     if (ncboxes == capcboxes) {
         capcboxes = capcboxes ? capcboxes * 2 : 16;
@@ -1182,7 +1789,7 @@ static void mark_first(int from, int sep)
 
 /* ---- text flow ---- */
 
-typedef struct { const char *s; int len, w, fnt, span, link, sp_before; COLORREF col, bg; } Tok;
+typedef struct { const char *s; int len, w, fnt, span, link, sp_before, brk, dy; COLORREF col, bg; } Tok;
 
 static Tok *tokenize(const Inline *in, int px, unsigned base, COLORREF basecol, int maxw, int *count)
 {
@@ -1193,11 +1800,25 @@ static Tok *tokenize(const Inline *in, int px, unsigned base, COLORREF basecol, 
         const Span *sp = &in->s[k];
         unsigned fl = base | sp->flags;
         int code = (fl & F_CODE) != 0;
-        int fnt = font_get(code ? px : px, (fl & F_BOLD) != 0, (fl & (F_ITAL | F_IMG)) != 0,
-                           code, (fl & F_LINK) != 0);
-        COLORREF col = (fl & F_LINK) ? C_LINK : code ? C_CODE : (fl & F_IMG) ? C_GRAY : basecol;
+        int shrink = (fl & (F_SUB | F_SUP)) != 0;
+        int fnt = font_get(code ? CODE_PX * px / PX(11) : shrink ? px * 3 / 4 : px, (fl & F_BOLD) != 0, (fl & (F_ITAL | F_IMG)) != 0,
+                           code, ((fl & (F_LINK | F_UL)) != 0) | (((fl & F_STRIKE) != 0) << 1));
+        int dy = (fl & F_SUP) ? -px / 3 : (fl & F_SUB) ? px / 6 : 0;
+        COLORREF col = (fl & F_LINK) ? C_LINK : (fl & F_MARK) ? RGB(0, 0, 0) : code ? C_CODE : (fl & F_IMG) ? C_GRAY : basecol;
         const char *p = sp->text;
 
+        if (sp->flags & F_BREAK) {                /* ends the line */
+            Tok *tk;
+            if (n == cap) {
+                cap = cap ? cap * 2 : 32;
+                t = (Tok *)realloc(t, cap * sizeof(Tok));
+            }
+            tk = &t[n++];
+            memset(tk, 0, sizeof(*tk));
+            tk->s = ""; tk->fnt = font_get(px, 0, 0, 0, 0); tk->span = k; tk->brk = 1;
+            carry = 0;
+            continue;
+        }
         while (*p) {
             const char *start;
             int len, first = 1;
@@ -1215,6 +1836,12 @@ static Tok *tokenize(const Inline *in, int px, unsigned base, COLORREF basecol, 
                     SelectObject(mdc, fonts[fnt].h);
                     GetTextExtentExPoint(mdc, start, len, maxw, &fit, NULL, &sz);
                     if (fit < 1) fit = 1;
+                    if (nph) {                                      /* never inside a 4-byte symbol */
+                        int q = 0;
+                        unsigned long cq;
+                        while (q < fit) q += ph_unit(start + q, len - q, &cq);
+                        if (q > fit) fit = q - 4 > 0 ? q - 4 : q;
+                    }
                     take = fit;
                     w = text_w(fnt, start, take);
                 }
@@ -1225,7 +1852,9 @@ static Tok *tokenize(const Inline *in, int px, unsigned base, COLORREF basecol, 
                 tk = &t[n++];
                 tk->s = start; tk->len = take; tk->w = w; tk->fnt = fnt; tk->span = k;
                 tk->link = sp->link; tk->col = col;
-                tk->bg = code ? C_INLINEBG : NOBACK;
+                tk->brk = 0;
+                tk->bg = (fl & F_MARK) ? RGB(255, 255, 0) : code ? C_INLINEBG : NOBACK;
+                tk->dy = dy;
                 tk->sp_before = (first && carry) ? (prev_spw ? prev_spw : fonts[fnt].spw) : 0;
                 first = 0;
                 carry = 0;
@@ -1246,11 +1875,13 @@ static int layout_toks(Tok *t, int n, int x, int w, int y, int align, int emit)
 
     while (i < n) {
         int j = i, lw = 0, maxasc = 0, maxdesc = 0, k;
+        int wl = w;
         while (j < n) {
             int add = t[j].w + (j > i ? t[j].sp_before : 0);
-            if (j > i && lw + add > w) break;
+            if (j > i && lw + add > wl) break;
             lw += add;
             j++;
+            if (t[j - 1].brk) break;
         }
         for (k = i; k < j; k++) {
             FontEnt *f = &fonts[t[k].fnt];
@@ -1258,7 +1889,7 @@ static int layout_toks(Tok *t, int n, int x, int w, int y, int align, int emit)
             if (f->ht - f->asc > maxdesc) maxdesc = f->ht - f->asc;
         }
         if (emit) {
-            int cx = x + (align == 1 ? (w - lw) / 2 : align == 2 ? (w - lw) : 0);
+            int cx = x + (align == 1 ? (wl - lw) / 2 : align == 2 ? (wl - lw) : 0);
             k = i;
             while (k < j) {
                 int e = k, fw = t[k].w, flen = t[k].len, fx;
@@ -1266,6 +1897,7 @@ static int layout_toks(Tok *t, int n, int x, int w, int y, int align, int emit)
                 FontEnt *f = &fonts[t[k].fnt];
                 Item *it;
 
+                if (t[k].brk) { k++; continue; }
                 if (k > i) cx += t[k].sp_before;
                 fx = cx;
                 /* merge following tokens of the same span into one fragment */
@@ -1286,8 +1918,8 @@ static int layout_toks(Tok *t, int n, int x, int w, int y, int align, int emit)
                     flen = pos;
                 }
                 if (t[k].bg != NOBACK)
-                    rect(fx - S(2), cy + (maxasc - f->asc) - 1, fw + S(4), f->ht + 2, t[k].bg);
-                it = add_item(IT_TEXT, fx, cy + (maxasc - f->asc), fw, f->ht, t[k].col);
+                    rect(fx - S(2), cy + (maxasc - f->asc) + t[k].dy - 1, fw + S(4), f->ht + 2, t[k].bg);
+                it = add_item(IT_TEXT, fx, cy + (maxasc - f->asc) + t[k].dy, fw, f->ht, t[k].col);
                 it->font = t[k].fnt;
                 it->link = t[k].link;
                 it->text = txt;
@@ -1320,12 +1952,16 @@ static void natural_width(const Inline *in, int px, unsigned base, int *nat, int
 {
     int n, k, total = 0, lg = 0;
     Tok *t = tokenize(in, px, base, 0, 0, &n);
+    int best = 0;
     for (k = 0; k < n; k++) {
-        total += t[k].w + (k ? t[k].sp_before : 0);
+        if (t[k].brk) continue;
+        if (k == 0 || t[k - 1].brk) total = t[k].w;
+        else total += t[k].sp_before + t[k].w;
+        if (total > best) best = total;
         if (t[k].w > lg) lg = t[k].w;
     }
     free(t);
-    *nat = total;
+    *nat = best;
     *longest = lg;
 }
 
@@ -1333,9 +1969,9 @@ static void natural_width(const Inline *in, int px, unsigned base, int *nat, int
 
 /* ---- syntax highlighting for fenced code ---- */
 
-enum { HC_PLAIN, HC_KW, HC_CTRL, HC_STR, HC_COM, HC_NUM, HC_TYPE, HC_PRE };
-static const int hl_pal[] = { P_BLOCK, P_KW, P_CTRL, P_STR, P_COM, P_NUM, P_TYPE, P_PRE };
-enum { FAM_NONE, FAM_C, FAM_HASH, FAM_SQL, FAM_JSON, FAM_MARKUP };
+enum { HC_PLAIN, HC_KW, HC_CTRL, HC_STR, HC_COM, HC_NUM, HC_TYPE, HC_PRE, HC_ATTR, HC_KEY };
+static const int hl_pal[] = { P_BLOCK, P_KW, P_CTRL, P_STR, P_COM, P_NUM, P_TYPE, P_PRE, P_ATTR, P_KEY };
+enum { FAM_NONE, FAM_DIFF, FAM_C, FAM_HASH, FAM_SQL, FAM_JSON, FAM_MARKUP };
 
 static const char *kw_ctrl =
     " if else elif for foreach while do switch case default break continue return goto try catch except finally"
@@ -1379,6 +2015,7 @@ static int lang_family(const char *lang, int *pre_ok)
     for (i = 0; pre_langs[i]; i++) if (!strcmp(lang, pre_langs[i])) *pre_ok = 1;
     for (i = 0; c_like[i]; i++) if (!strcmp(lang, c_like[i])) return FAM_C;
     for (i = 0; hashy[i]; i++) if (!strcmp(lang, hashy[i])) return FAM_HASH;
+    if (!strcmp(lang, "diff") || !strcmp(lang, "patch")) return FAM_DIFF;
     if (!strcmp(lang, "sql")) return FAM_SQL;
     if (!strcmp(lang, "json") || !strcmp(lang, "jsonc")) return FAM_JSON;
     if (!strcmp(lang, "html") || !strcmp(lang, "htm") || !strcmp(lang, "xml") || !strcmp(lang, "svg") ||
@@ -1391,6 +2028,13 @@ static void hl_line(const char *s, int n, unsigned char *cls, int fam, int pre_o
 {
     int i = 0, j;
 
+    if (fam == FAM_DIFF) {                               /* the whole line by its first characters */
+        int c = n && s[0] == '+' && strncmp(s, "+++", 3) ? HC_COM : n && s[0] == '-' && strncmp(s, "---", 3) ? HC_STR :
+                (n && s[0] == '@') || !strncmp(s, "+++", 3) || !strncmp(s, "---", 3) ||
+                !strncmp(s, "diff ", 5) || !strncmp(s, "index ", 6) ? HC_KW : HC_PLAIN;
+        memset(cls, c, n);
+        return;
+    }
     if (pre_ok && !*state) {
         while (i < n && (s[i] == ' ' || s[i] == '\t')) i++;
         if (i < n && s[i] == '#') { memset(cls + i, HC_PRE, n - i); return; }
@@ -1427,7 +2071,7 @@ static void hl_line(const char *s, int n, unsigned char *cls, int fam, int pre_o
                         while (i < n && s[i] != q) cls[i++] = HC_STR;
                         if (i < n) cls[i++] = HC_STR;
                     } else {
-                        cls[i] = (isalpha((unsigned char)s[i]) || s[i] == '-' || s[i] == ':') ? HC_TYPE : HC_PLAIN;
+                        cls[i] = (isalpha((unsigned char)s[i]) || s[i] == '-' || s[i] == ':') ? HC_ATTR : HC_PLAIN;
                         i++;
                     }
                 }
@@ -1465,6 +2109,12 @@ static void hl_line(const char *s, int n, unsigned char *cls, int fam, int pre_o
                 cls[i++] = HC_STR;
             }
             if (i < n) cls[i++] = HC_STR;
+            if (fam == FAM_JSON) {                          /* a string followed by a colon is an object key */
+                for (j = i; j < n && s[j] == ' '; j++) ;
+                if (j < n && s[j] == ':') {
+                    for (j = i - 1; j >= 0 && cls[j] == HC_STR; j--) cls[j] = HC_KEY;
+                }
+            }
             continue;
         }
         if (isdigit((unsigned char)c) &&
@@ -1501,7 +2151,7 @@ static void hl_line(const char *s, int n, unsigned char *cls, int fam, int pre_o
 
 static int head_pt(int level)
 {
-    static const int pts[] = {0, 20, 16, 14, 12, 11, 11};
+    static const int pts[] = {0, 14, 13, 12, 11, 11, 11};     /* Win95 help: titles are the body size plus a point, in bold */
     return pts[level];
 }
 
@@ -1510,26 +2160,90 @@ static int block_gap(const Block *prev, const Block *b)
     if (!prev) return 0;
     if (b->kind == BK_LIST && prev->kind == BK_LIST) {
         if (b->level == 0 && prev->level == 0 && b->numbered != prev->numbered) return S(12);
-        return S(4);
+        return b->loose && prev->loose ? S(10) : S(4);
     }
     if (b->inset || (prev->inset && b->kind == BK_LIST)) return S(8);
     if (prev->kind == BK_HEAD) return S(8);
-    if (b->kind == BK_HEAD) return S(b->level <= 2 ? 22 : 16);
-    return S(12);
+    if (b->kind == BK_HEAD) return S(b->level <= 2 ? 14 : 10);
+    return S(10);
+}
+
+static int lay_cell;                    /* laying out inside a table cell: tighter indents */
+#define L_BASE (lay_cell ? 0 : S(8))
+#define L_STEP (lay_cell ? S(18) : S(26))
+#define L_TEXT (lay_cell ? S(18) : S(24))
+
+static int layout_blocks(Block *bl, int nb, int x0, int cwid, int y, unsigned fl, int align);
+
+/* how tall a cell is at width w: laid out for real, then the items are thrown away again */
+static int cell_height(const Cell *c, int w, unsigned fl)
+{
+    int ni = nitems, nc = ncboxes, h;
+    h = layout_blocks(c->b, c->n, 0, w, 0, fl, 0);
+    nitems = ni;
+    ncboxes = nc;
+    return h;
+}
+
+/* the widest the cell wants to be, and the width of its longest unbreakable word */
+static void cell_natural(const Cell *c, unsigned fl, int *nat, int *longest)
+{
+    int i, n0 = 0, l0 = 0;
+    for (i = 0; i < c->n; i++) {
+        const Block *b = &c->b[i];
+        int n = 0, l = 0, ix = 0;
+        switch (b->kind) {
+        case BK_HEAD:
+            natural_width(&b->inl, PX(head_pt(b->level)), fl | F_BOLD, &n, &l);
+            break;
+        case BK_LIST:
+            natural_width(&b->inl, PX(11), fl, &n, &l);
+            ix = L_BASE + b->level * L_STEP + L_TEXT;
+            break;
+        case BK_QUOTE:
+            cell_natural(&b->cells[0], fl, &n, &l);
+            ix = S(18);
+            break;
+        case BK_CODE: {
+            int fnt = font_get(CODE_PX, 0, 0, 1, 0), k, cols, maxcols = 0;
+            const char *q;
+            for (k = 0; k < b->nlines; k++) {
+                for (cols = 0, q = b->lines[k]; *q; q++) cols += *q == '\t' ? 4 : 1;
+                if (cols > maxcols) maxcols = cols;
+            }
+            n = maxcols * text_w(fnt, "M", 1) + 2 * S(10);
+            l = S(60);
+            break;
+        }
+        case BK_PARA:
+            natural_width(&b->inl, PX(11), fl, &n, &l);
+            break;
+        }
+        if (b->inset) ix += L_BASE + (b->inset - 1) * L_STEP + L_TEXT;
+        n += ix; l += ix;
+        if (n > n0) n0 = n;
+        if (l > l0) l0 = l;
+    }
+    *nat = n0;
+    *longest = l0;
 }
 
 static void layout_table(Block *b, int x0, int avail, int *py)
 {
     int cols = b->cols, rows = b->rows, r, c;
-    int px = PX(11), padx = S(9), pady = S(2);
+    int padx = S(8), pady = S(3), saved_cell = lay_cell;
     int nat[MAXCOLS] = {0}, mn[MAXCOLS] = {0}, cw[MAXCOLS] = {0};
     int *rh = (int *)malloc((rows + 1) * sizeof(int));
-    int sumnat = 0, summin = 0, tw = 0, y = *py, x;
+    int sumnat = 0, summin = 0, tw = 0, y = *py, x, it0 = nitems, vis_x = x0, vis_w = avail;
+
+    lay_cell = 1;
+    x0 -= S(8);                                     /* the first column's text lines up with the body text */
+    avail += 2 * S(8);
 
     for (r = 0; r < rows; r++)
         for (c = 0; c < cols; c++) {
             int n, l;
-            natural_width(&b->cells[r * cols + c], px, (b->header && r == 0) ? F_BOLD : 0, &n, &l);
+            cell_natural(&b->cells[r * cols + c], (b->header && r == 0) ? F_BOLD : 0, &n, &l);
             n += 2 * padx; l += 2 * padx;
             if (n > nat[c]) nat[c] = n;
             if (l > mn[c]) mn[c] = l;
@@ -1548,36 +2262,38 @@ static void layout_table(Block *b, int x0, int avail, int *py)
     for (r = 0; r < rows; r++) {                     /* row heights */
         int h = 0;
         for (c = 0; c < cols; c++) {
-            int ch = flow(&b->cells[r * cols + c], 0, cw[c] - 2 * padx, 0, px,
-                          (b->header && r == 0) ? F_BOLD : 0, C_TEXT, 0, 0);
+            int ch = cell_height(&b->cells[r * cols + c], cw[c] - 2 * padx, (b->header && r == 0) ? F_BOLD : 0);
             if (ch > h) h = ch;
         }
         rh[r] = h + 2 * pady;
     }
 
-    /* backgrounds, then grid, then text */
-    for (r = 0, y = *py; r < rows; y += rh[r], r++) {
-        if (b->header && r == 0) rect(x0, y, tw, rh[r], C_THEAD);
-        else if ((r - (b->header ? 1 : 0)) % 2 == 1) rect(x0, y, tw, rh[r], C_ZEBRA);
-    }
-    for (r = 0, y = *py; r <= rows; r++) {
-        rect(x0, y, tw + 1, 1, C_GRID);
-        if (r < rows) y += rh[r];
-    }
-    for (c = 0, x = x0; c <= cols; c++) {
-        rect(x, *py, 1, y - *py + 1, C_GRID);
-        if (c < cols) x += cw[c];
-    }
+    /* like a help file: no grid or shading, just a rule under the header */
+    if (b->header) rect(x0 + padx, *py + rh[0] - 1, tw - 2 * padx, 1, C_TEXT);
     for (r = 0, y = *py; r < rows; y += rh[r], r++) {
         for (c = 0, x = x0; c < cols; x += cw[c], c++) {
+            const Cell *cell = &b->cells[r * cols + c];
             int first = nitems;
-            flow(&b->cells[r * cols + c], x + padx, cw[c] - 2 * padx, y + pady, px,
-                 (b->header && r == 0) ? F_BOLD : 0, C_TEXT, b->align[c], 1);
+            layout_blocks(cell->b, cell->n, x + padx, cw[c] - 2 * padx, y + pady,
+                          (b->header && r == 0) ? F_BOLD : 0, b->align[c]);
             mark_first(first, c == 0 ? 1 : 2);
         }
     }
-    *py = y + 1;
+    if (tw > avail) {                               /* wider than the page: it scrolls sideways like a code block */
+        int k, h = y - *py + S(12);
+        CodeBox *cb;
+        for (k = it0; k < nitems; k++)
+            if (!items[k].box) items[k].box = ncboxes + 1;
+        cb = add_cbox(vis_x, *py, vis_w, h, b);
+        cb->bx = vis_x; cb->by = *py; cb->bw = cb->bh = 0;
+        cb->hmax = tw - S(8) - vis_w;
+        cb->it0 = it0;
+        cb->it1 = nitems;
+        y += S(12);
+    }
+    *py = y;
     free(rh);
+    lay_cell = saved_cell;
 }
 
 static int lay_cwid, lay_x0;
@@ -1607,53 +2323,50 @@ static int shift_layout(int cw)
     return 1;
 }
 
-static void layout_all(int cw)
+static int layout_blocks(Block *bl, int nb, int x0, int cwid, int y, unsigned fl, int align)
 {
-    int cwid, x0, y, i;
+    int i;
     const Block *prev = NULL;
-    DWORD t0 = GetTickCount();
 
-    free_items();
-    content_box(cw, &cwid, &x0);
-    lay_cwid = cwid; lay_x0 = x0;
-    y = S(12);
-
-    for (i = 0; i < nblocks; i++) {
-        Block *b = &blocks[i];
+    for (i = 0; i < nb; i++) {
+        Block *b = &bl[i];
         int start = nitems, ix = 0;
         y += block_gap(prev, b);
         b->y = y;
-        if (b->inset && (b->kind == BK_PARA || b->kind == BK_CODE)) {       /* inside a list item */
-            ix = S(8) + (b->inset - 1) * S(26) + S(24);
+        if (b->inset) {                                         /* inside a list item */
+            ix = L_BASE + (b->inset - 1) * L_STEP + L_TEXT;
             x0 += ix;
             cwid -= ix;
         }
 
         switch (b->kind) {
         case BK_PARA:
-            y += flow(&b->inl, x0, cwid, y, PX(11), 0, C_TEXT, 0, 1);
+            y += flow(&b->inl, x0, cwid, y, PX(11), fl, C_TEXT, b->halign ? b->halign : align, 1);
             break;
         case BK_HEAD: {
-            int h = flow(&b->inl, x0, cwid, y, PX(head_pt(b->level)), F_BOLD, C_HEAD, 0, 1);
+            int h = flow(&b->inl, x0, cwid, y, PX(head_pt(b->level)), fl | F_BOLD, C_HEAD, b->halign ? b->halign : align, 1);
             y += h;
-            if (b->level <= 2) {
-                rect(x0, y + S(3), cwid, 1, C_RULE);
-                y += S(5);
-            }
             break;
         }
         case BK_LIST: {
             int px = PX(11);
-            int base = S(8) + b->level * S(26);
-            int tx = x0 + base + S(24);
+            int base = L_BASE + b->level * L_STEP;
+            int tx = x0 + base + L_TEXT;
             int first_ht = fonts[font_get(px, 0, 0, 0, 0)].ht;
             int h;
-            if (b->numbered) {
+            if (b->numbered || b->task) {
                 char label[24];
-                int n = sprintf(label, "%s.", b->num);
-                int f = font_get(px, 0, 0, 0, 0);
-                int w = text_w(f, label, n);
-                Item *it = add_item(IT_TEXT, tx - S(6) - w, y, w, first_ht, C_GRAY);
+                int n, f = font_get(px, 0, 0, 0, 0), w;
+                Item *it;
+                if (b->task) {                                  /* a check box instead of the number */
+                    n = ph_enc(b->task == 2 ? 0x2611 : 0x2610, label);
+                    label[n] = 0;
+                    nph = 1;
+                } else {
+                    n = sprintf(label, "%s.", b->num);
+                }
+                w = text_w(f, label, n);
+                it = add_item(IT_TEXT, tx - S(6) - w, y, w, first_ht, C_GRAY);
                 it->font = f;
                 it->text = text_alloc(n + 1);
                 strcpy(it->text, label);
@@ -1664,20 +2377,26 @@ static void layout_all(int cw)
                 else if (b->level == 1) add_item(IT_RING, tx - S(14), cy, d, d, C_TEXT);
                 else                    rect(tx - S(14), cy, d - 1, d - 1, C_TEXT);
             }
-            h = flow(&b->inl, tx, cwid - (tx - x0), y, px, 0, C_TEXT, 0, 1);
+            h = flow(&b->inl, tx, cwid - (tx - x0), y, px, fl, C_TEXT, 0, 1);
             y += h;
+            break;
+        }
+        case BK_DETAILS: {                                      /* a summary line that opens and closes its content */
+            int open = det_open[b->did], h;
+            ph_enc(open ? 0x25BC : 0x25B6, b->inl.s[0].text);
+            h = flow(&b->inl, x0, cwid, y, PX(11), fl, C_TEXT, 0, 1);
+            y += h;
+            if (open && b->cells[0].n) y = layout_blocks(b->cells[0].b, b->cells[0].n, x0 + S(18), cwid - S(18), y + S(8), fl, align);
             break;
         }
         case BK_QUOTE: {
-            int qx = x0 + S(18), h;
-            h = flow(&b->inl, qx, cwid - S(18), y, PX(11), F_ITAL, C_GRAY, 0, 0);
-            rect(x0 + S(2), y, S(4), h, C_QBAR);
-            flow(&b->inl, qx, cwid - S(18), y, PX(11), F_ITAL, C_GRAY, 0, 1);
-            y += h;
+            int ye = layout_blocks(b->cells[0].b, b->cells[0].n, x0 + S(18), cwid - S(18), y, fl, align);
+            if (ye > y) rect(x0 + S(2), y, S(4), ye - y, C_QBAR);
+            y = ye;
             break;
         }
         case BK_CODE: {
-            int pad = S(10), fnt = font_get(PX(11), 0, 0, 1, 0);
+            int pad = S(10), fnt = font_get(CODE_PX, 0, 0, 1, 0);
             int lh = fonts[fnt].ht + S(1), charw = text_w(fnt, "M", 1);
             int k, h, ly, pre_ok, hstate = 0, maxcols = 0, hmax, it0;
             int fam = lang_family(b->num, &pre_ok);
@@ -1706,6 +2425,8 @@ static void layout_all(int cw)
                 exp[len] = 0;
                 cls = (unsigned char *)calloc(len + 1, 1);
                 if (fam) hl_line(exp, len, cls, fam, pre_ok, &hstate);
+                if (fam == FAM_DIFF && len && (exp[0] == '+' || exp[0] == '-') && strncmp(exp, "+++", 3) && strncmp(exp, "---", 3))
+                    rect(x0 + 1, ly, cwid - 2, lh, exp[0] == '+' ? pal[P_ADDBG] : pal[P_DELBG]);   /* the whole line, as VS Code does */
                 first = nitems;
                 while (r0 < len) {                              /* one item per run of the same colour */
                     int r1 = r0 + 1;
@@ -1727,7 +2448,7 @@ static void layout_all(int cw)
                 free(cls);
             }
             {
-                CodeBox *cb = add_cbox(x0, y, cwid, h, i);
+                CodeBox *cb = add_cbox(x0, y, cwid, h, b);
                 cb->font = font_get(PX(9), 0, 0, 0, 0);
                 cb->bh = fonts[cb->font].ht + S(11);
                 cb->bw = cb->bh;
@@ -1744,7 +2465,7 @@ static void layout_all(int cw)
             layout_table(b, x0, cwid, &y);
             break;
         case BK_RULE:
-            rect(x0, y + S(4), cwid, S(2) > 1 ? S(2) : 1, C_RULE);
+            rect(x0, y + S(4), cwid, 1, C_TEXT);                  /* a thin dark line, as in a help file */
             y += S(8);
             break;
         }
@@ -1753,6 +2474,18 @@ static void layout_all(int cw)
         mark_first(start, b->kind == BK_LIST ? 1 : 3);
         prev = b;
     }
+    return y;
+}
+
+static void layout_all(int cw)
+{
+    int cwid, x0, y;
+    DWORD t0 = GetTickCount();
+
+    free_items();
+    content_box(cw, &cwid, &x0);
+    lay_cwid = cwid; lay_x0 = x0;
+    y = layout_blocks(blocks, nblocks, x0, cwid, S(12), 0, 0);
     doc_h = y + S(28);
     g_layout_ms = GetTickCount() - t0;
     if (g_diag_layout) {
@@ -1784,6 +2517,15 @@ static void sb_inline(const Inline *in)
     for (k = 0; k < in->n; k++) sb_add(in->s[k].text);
 }
 
+static void sb_cell(const Cell *c)
+{
+    int i;
+    for (i = 0; i < c->n; i++) {
+        if (i) sb_add(" ");
+        sb_inline(&c->b[i].inl);
+    }
+}
+
 static char *doc_text(void)
 {
     int i, r, c, k;
@@ -1805,7 +2547,7 @@ static char *doc_text(void)
             for (r = 0; r < b->rows; r++) {
                 for (c = 0; c < b->cols; c++) {
                     if (c) sb_add("\t");
-                    sb_inline(&b->cells[r * b->cols + c]);
+                    sb_cell(&b->cells[r * b->cols + c]);
                 }
                 sb_add("\r\n");
             }
@@ -1814,8 +2556,21 @@ static char *doc_text(void)
         case BK_RULE:
             sb_add("---\r\n\r\n");
             break;
+        case BK_DETAILS:
+            sb_inline(&b->inl);
+            sb_add("\r\n\r\n");
+            break;
+        case BK_QUOTE: {
+            int q;
+            for (q = 0; q < b->cells[0].n; q++) {
+                sb_add("> ");
+                sb_inline(&b->cells[0].b[q].inl);
+                sb_add("\r\n");
+            }
+            sb_add("\r\n");
+            break;
+        }
         default:
-            if (b->kind == BK_QUOTE) sb_add("> ");
             sb_inline(&b->inl);
             sb_add("\r\n\r\n");
         }
@@ -1825,9 +2580,39 @@ static char *doc_text(void)
 
 /* ---- text decoding: UTF-8 -> Windows-1252 ---- */
 
+/* a Unicode code point as Windows-1252, or as a symbol drawn with the Unicode / Wingdings fonts; returns the bytes written */
+static int put_cp(unsigned long cp, char *o)
+{
+    char *p = o;
+    if (cp < 0x80 || (cp >= 0xA0 && cp < 0x100)) { *p++ = (char)cp; return 1; }
+    switch (cp) {
+    case 0xFEFF: break;
+    case 0x2018: *p++ = (char)0x91; break;
+    case 0x2019: *p++ = (char)0x92; break;
+    case 0x201C: *p++ = (char)0x93; break;
+    case 0x201D: *p++ = (char)0x94; break;
+    case 0x2022: *p++ = (char)0x95; break;
+    case 0x2013: *p++ = (char)0x96; break;
+    case 0x2014: *p++ = (char)0x97; break;
+    case 0x2026: *p++ = (char)0x85; break;
+    case 0x2122: *p++ = (char)0x99; break;
+    case 0x20AC: *p++ = (char)0x80; break;
+    default:
+        if (cp == 0xFE0F || cp == 0xFE0E || cp == 0x200D || cp == 0x200B || (cp >= 0x1F3FB && cp <= 0x1F3FF)) break;
+        if ((g_uni || sym_lookup(cp)) && cp >= 0x100) {
+            p += ph_enc(cp, p);
+            nph = 1;
+        } else {
+            *p++ = '?';
+        }
+        break;
+    }
+    return (int)(p - o);
+}
+
 static char *utf8_to_ansi(const unsigned char *s, long n)
 {
-    char *o = (char *)malloc(n + 1), *p = o;
+    char *o = (char *)malloc(n * 2 + 1), *p = o;          /* a 2-byte UTF-8 char can become a 4-byte symbol */
     long i = 0;
 
     while (i < n) {
@@ -1844,29 +2629,7 @@ static char *utf8_to_ansi(const unsigned char *s, long n)
             *p++ = '?'; i++; continue;
         }
         i += len;
-        if (cp >= 0xA0 && cp < 0x100) { *p++ = (char)cp; continue; }
-        switch (cp) {
-        case 0xFEFF: break;
-        case 0x2018: *p++ = (char)0x91; break;
-        case 0x2019: *p++ = (char)0x92; break;
-        case 0x201C: *p++ = (char)0x93; break;
-        case 0x201D: *p++ = (char)0x94; break;
-        case 0x2022: *p++ = (char)0x95; break;
-        case 0x2013: *p++ = (char)0x96; break;
-        case 0x2014: *p++ = (char)0x97; break;
-        case 0x2026: *p++ = (char)0x85; break;
-        case 0x2122: *p++ = (char)0x99; break;
-        case 0x20AC: *p++ = (char)0x80; break;
-        case 0x2192: *p++ = '-'; *p++ = '>'; break;
-        case 0x2190: *p++ = '<'; *p++ = '-'; break;
-        default:
-            if (cp == 0xFE0F || cp == 0xFE0E || cp == 0x200D || cp == 0x200B || (cp >= 0x1F3FB && cp <= 0x1F3FF)) break;
-            {
-                int code = g_uni && cp >= 0x100 ? ph_get(cp) : 0;
-                *p++ = code ? (char)code : '?';
-            }
-            break;
-        }
+        p += put_cp(cp, p);
     }
     *p = 0;
     return o;
@@ -1987,6 +2750,108 @@ static int sel_norm(SelPos *a, SelPos *b)
     return a->item != b->item || a->off != b->off;
 }
 
+/* ---- colour emoji (Windows 10+): Direct2D / DirectWrite, loaded at run time ---- */
+
+typedef struct { void **vt; } ComObj;
+typedef struct { int type, fmt, alpha; float dpix, dpiy; int usage, level; } D2RTProps;
+typedef HRESULT (WINAPI *PD2CF)(int, const GUID *, const void *, void **);
+typedef HRESULT (WINAPI *PDWCF)(int, const GUID *, void **);
+typedef HRESULT (WINAPI *PD2MKRT)(void *, const D2RTProps *, ComObj **);
+typedef HRESULT (WINAPI *PD2BRUSH)(void *, const float *, const void *, ComObj **);
+typedef HRESULT (WINAPI *PD2BIND)(void *, HDC, const RECT *);
+typedef void (WINAPI *PD2BEGIN)(void *);
+typedef HRESULT (WINAPI *PD2END)(void *, void *, void *);
+typedef void (WINAPI *PD2TEXT)(void *, const wchar_t *, UINT, void *, const float *, void *, UINT, UINT);
+typedef void (WINAPI *PD2SETCOL)(void *, const float *);
+typedef HRESULT (WINAPI *PDWFMT)(void *, const wchar_t *, void *, int, int, int, float, const wchar_t *, ComObj **);
+
+static ComObj *d2_rt, *d2_brush, *dw_fac;
+static int d2_state;                    /* 0 not tried, 1 ready, -1 not available */
+static struct { int px; ComObj *fmt; } d2_fmts[16];
+static int nd2f;
+
+static void d2_init(void)
+{
+    static const GUID iid_d2f = {0x06152247, 0x6f50, 0x465a, {0x92, 0x45, 0x11, 0x8b, 0xfd, 0x3b, 0x60, 0x07}};
+    static const GUID iid_dwf = {0xb859ee5a, 0xd838, 0x4b5b, {0xa2, 0xe8, 0x1a, 0xdc, 0x7d, 0x93, 0xdb, 0x48}};
+    HMODULE hd, hw;
+    ComObj *fac = NULL;
+    D2RTProps pr;
+    float black[4] = {0, 0, 0, 1};
+    PD2CF mkd2;
+    PDWCF mkdw;
+
+    d2_state = -1;
+    if (!g_uni || !GetProcAddress(GetModuleHandle("user32.dll"), "GetDpiForSystem")) return;     /* colour glyphs need Windows 10 */
+    hd = LoadLibrary("d2d1.dll");
+    hw = LoadLibrary("dwrite.dll");
+    if (!hd || !hw) return;
+    mkd2 = (PD2CF)GetProcAddress(hd, "D2D1CreateFactory");
+    mkdw = (PDWCF)GetProcAddress(hw, "DWriteCreateFactory");
+    if (!mkd2 || !mkdw) return;
+    if (mkd2(0, &iid_d2f, NULL, (void **)&fac) < 0 || !fac) return;
+    if (mkdw(0, &iid_dwf, (void **)&dw_fac) < 0 || !dw_fac) return;
+    memset(&pr, 0, sizeof(pr));
+    pr.fmt = 87;                                    /* DXGI_FORMAT_B8G8R8A8_UNORM */
+    pr.alpha = 1;                                   /* premultiplied */
+    if (((PD2MKRT)fac->vt[16])(fac, &pr, &d2_rt) < 0 || !d2_rt) return;
+    if (((PD2BRUSH)d2_rt->vt[8])(d2_rt, black, NULL, &d2_brush) < 0 || !d2_brush) return;
+    d2_state = 1;
+}
+
+static ComObj *d2_format(int px)
+{
+    int k;
+    ComObj *f = NULL;
+    for (k = 0; k < nd2f; k++)
+        if (d2_fmts[k].px == px) return d2_fmts[k].fmt;
+    if (nd2f == 16) return NULL;
+    if (((PDWFMT)dw_fac->vt[15])(dw_fac, L"Segoe UI Emoji", NULL, 400, 0, 5, (float)px, L"en-us", &f) < 0 || !f) return NULL;
+    d2_fmts[nd2f].px = px;
+    d2_fmts[nd2f].fmt = f;
+    return d2_fmts[nd2f++].fmt;
+}
+
+/* the emoji that default to colour (the rest, like the arrows, stay plain text-style glyphs) */
+static int emoji_color(unsigned long cp)
+{
+    return cp >= 0x1F000 || cp == 0x2764 || (cp >= 0x231A && cp <= 0x231B) || (cp >= 0x23E9 && cp <= 0x23F3) ||
+           cp == 0x2614 || cp == 0x2615 || (cp >= 0x2648 && cp <= 0x2653) || cp == 0x267F || cp == 0x2693 || cp == 0x26A1 ||
+           cp == 0x26AA || cp == 0x26AB || cp == 0x26BD || cp == 0x26BE || cp == 0x26C4 || cp == 0x26C5 || cp == 0x26D4 ||
+           cp == 0x26EA || cp == 0x26F2 || cp == 0x26F3 || cp == 0x26F5 || cp == 0x26FA || cp == 0x26FD || cp == 0x2705 ||
+           cp == 0x270A || cp == 0x270B || cp == 0x2728 || cp == 0x274C || cp == 0x274E || (cp >= 0x2753 && cp <= 0x2755) ||
+           cp == 0x2757 || (cp >= 0x2795 && cp <= 0x2797) || cp == 0x27B0 || cp == 0x27BF || cp == 0x2B1B || cp == 0x2B1C ||
+           cp == 0x2B50 || cp == 0x2B55;
+}
+
+/* draws one colour emoji with its baseline at y + asc; returns 0 if it could not */
+static int d2_draw(HDC dc, int x, int y, int asc, unsigned long cp, int px, int w)
+{
+    wchar_t ws[2];
+    int n = wide_of(cp, ws), top;
+    float col[4], rc[4];
+    RECT bind;
+    COLORREF c = GetTextColor(dc);
+    TEXTMETRIC tm;
+    HGDIOBJ old;
+    ComObj *fmt;
+
+    if (d2_state == 0) d2_init();
+    if (d2_state < 0 || !(fmt = d2_format(px))) return 0;
+    old = SelectObject(mdc, sym_font(px, cp));
+    GetTextMetrics(mdc, &tm);
+    SelectObject(mdc, old);
+    top = y + asc - tm.tmAscent;
+    bind.left = x - 2; bind.top = top - 2; bind.right = x + w + px / 2 + 2; bind.bottom = top + tm.tmHeight + px / 2 + 2;
+    if (((PD2BIND)d2_rt->vt[57])(d2_rt, dc, &bind) < 0) return 0;
+    col[0] = GetRValue(c) / 255.0f; col[1] = GetGValue(c) / 255.0f; col[2] = GetBValue(c) / 255.0f; col[3] = 1.0f;
+    ((PD2SETCOL)d2_brush->vt[8])(d2_brush, col);
+    rc[0] = 2; rc[1] = 2; rc[2] = (float)(bind.right - bind.left); rc[3] = (float)(bind.bottom - bind.top);
+    ((PD2BEGIN)d2_rt->vt[48])(d2_rt);
+    ((PD2TEXT)d2_rt->vt[27])(d2_rt, ws, n, fmt, rc, d2_brush, 4 /* ENABLE_COLOR_FONT */, 0);
+    return ((PD2END)d2_rt->vt[49])(d2_rt, NULL, NULL) >= 0;
+}
+
 /* text with embedded Unicode characters: plain runs with TextOut, the others with the Unicode symbol fonts */
 static void draw_run(HDC dc, int x, int y, const char *s, int len, int fnt)
 {
@@ -1994,22 +2859,38 @@ static void draw_run(HDC dc, int x, int y, const char *s, int len, int fnt)
     if (!nph) { TextOut(dc, x, y, s, len); return; }
     while (s < e) {
         const char *r = s;
-        while (r < e && ((unsigned char)*r >= 32 || !ph_cp[(unsigned char)*r])) r++;
+        unsigned long cp = 0;
+        int u = 1;
+        while (r < e) {
+            if (*r == PH_LEAD) {
+                u = ph_unit(r, (int)(e - r), &cp);
+                if (cp) break;
+            }
+            r++;
+        }
         if (r > s) {
             TextOut(dc, x, y, s, (int)(r - s));
             x += text_w(fnt, s, (int)(r - s));
         }
         if (r < e) {
-            unsigned c = (unsigned char)*r;
-            wchar_t w[2];
-            int n = wide_of(ph_cp[c], w);
-            SelectObject(dc, sym_font(fonts[fnt].px, ph_cp[c]));
-            SetTextAlign(dc, TA_BASELINE | TA_LEFT);
-            pExtTextOutW(dc, x, y + fonts[fnt].asc, 0, NULL, w, n, NULL);
-            SetTextAlign(dc, TA_TOP | TA_LEFT);
-            SelectObject(dc, fonts[fnt].h);
-            x += ph_width(fnt, c);
-            r++;
+            int pw = ph_width(fnt, cp);
+            if (!(g_uni && emoji_color(cp) && d2_draw(dc, x, y, fonts[fnt].asc, cp, fonts[fnt].px, pw))) {
+                wchar_t w[2];
+                int n = wide_of(cp, w);
+                SelectObject(dc, sym_font(fonts[fnt].px, cp));
+                SetTextAlign(dc, TA_BASELINE | TA_LEFT);
+                if (g_uni) {
+                    pExtTextOutW(dc, x, y + fonts[fnt].asc, 0, NULL, w, n, NULL);
+                } else {
+                    const SymMap *sm2 = sym_lookup(cp);
+                    char ch = sm2 ? (char)sm2->ch : '?';
+                    TextOut(dc, x, y + fonts[fnt].asc, &ch, 1);
+                }
+                SetTextAlign(dc, TA_TOP | TA_LEFT);
+                SelectObject(dc, fonts[fnt].h);
+            }
+            x += pw;
+            r += u;
         }
         s = r;
     }
@@ -2055,14 +2936,18 @@ static SelPos pos_at(int x, int y)
         p.off = it->len;
     } else {
         int fit = 0, w1 = 0, w2 = 0, dx = x - it->x;
+        unsigned long fit_k;
         while (fit < it->len) {
-            w2 = w1 + text_w(it->font, it->text + fit, 1);
+            int u = 1;
+            unsigned long k;
+            if (nph) u = ph_unit(it->text + fit, it->len - fit, &k);
+            w2 = w1 + text_w(it->font, it->text + fit, u);
             if (w2 > dx) break;
             w1 = w2;
-            fit++;
+            fit += u;
         }
         if (fit >= it->len) w2 = w1;
-        p.off = (dx - w1 < w2 - dx) ? fit : (fit < it->len ? fit + 1 : fit);
+        p.off = (dx - w1 < w2 - dx) ? fit : (fit < it->len ? fit + (w2 > w1 && nph ? ph_unit(it->text + fit, it->len - fit, &fit_k) : 1) : fit);
     }
     return p;
 }
@@ -2250,7 +3135,7 @@ static void paint(HDC dc, const RECT *clip)
             {
                 int s0, s1;
                 if (have_sel && sel_range(i, &sa, &sb2, &s0, &s1)) {
-                    int x0 = it->x + prefix_w(backdc, it, s0), x1 = it->x + prefix_w(backdc, it, s1);
+                    int tx = it->x + prefix_w(backdc, it, s0), x0 = tx, x1 = it->x + prefix_w(backdc, it, s1);
                     RECT r;
                     if (s0 == 0 && i > sa.item) {         /* fill the gap after the previous selected word */
                         int j = i - 1;
@@ -2267,7 +3152,7 @@ static void paint(HDC dc, const RECT *clip)
                     draw_run(backdc, it->x, top, it->text, s0, it->font);
                     draw_run(backdc, x1, top, it->text + s1, it->len - s1, it->font);
                     SetTextColor(backdc, GetSysColor(COLOR_HIGHLIGHTTEXT));
-                    draw_run(backdc, x0, top, it->text + s0, s1 - s0, it->font);
+                    draw_run(backdc, tx, top, it->text + s0, s1 - s0, it->font);
                 } else {
                     SetTextColor(backdc, it->col);
                     draw_run(backdc, it->x, top, it->text, it->len, it->font);
@@ -2317,7 +3202,7 @@ static void paint(HDC dc, const RECT *clip)
         int top = cb->by - g_scroll, hot = (i == hot_box && btn_hot);
         int done = (i == copied_box);
         RECT r;
-        if ((i != hot_box && i != copied_box) || top > view_h || top + cb->bh < 0) continue;
+        if ((i != hot_box && i != copied_box) || !cb->bw || top > view_h || top + cb->bh < 0) continue;   /* tables have no Copy button */
         r.left = cb->bx; r.top = top; r.right = cb->bx + cb->bw; r.bottom = top + cb->bh;
         SetBkMode(backdc, OPAQUE);
         SetBkColor(backdc, C_BLOCKBD);
@@ -2447,9 +3332,13 @@ static int goto_anchor(const char *frag)
 
 static int has_ph(const char *s)
 {
-    if (!nph) return 0;
-    for (; *s; s++)
-        if ((unsigned char)*s < 32 && ph_cp[(unsigned char)*s]) return 1;
+    if (!nph || !g_uni) return 0;
+    while (*s) {
+        unsigned long cp;
+        int u = ph_unit(s, 4, &cp);
+        if (cp) return 1;
+        s += u;
+    }
     return 0;
 }
 
@@ -2460,12 +3349,21 @@ static wchar_t *widen(const char *s)
     int n = 0;
     while (*s) {
         const char *r = s;
-        while (*r && !((unsigned char)*r < 32 && ph_cp[(unsigned char)*r])) r++;
+        unsigned long cp = 0;
+        int u = 1;
+        while (*r) {
+            u = ph_unit(r, 4, &cp);
+            if (cp) break;
+            r += u;
+        }
         if (r > s) {
             n += MultiByteToWideChar(CP_ACP, 0, s, (int)(r - s), w + n, (int)(r - s));
             s = r;
         }
-        if (*s) n += wide_of(ph_cp[(unsigned char)*s++], w + n);
+        if (*s) {
+            n += wide_of(cp, w + n);
+            s += u;
+        }
     }
     w[n] = 0;
     return w;
@@ -2488,7 +3386,16 @@ static void put_clipboard(const char *s)
     } else {
         g = GlobalAlloc(GMEM_MOVEABLE, strlen(s) + 1);
         if (g) {
-            memcpy(GlobalLock(g), s, strlen(s) + 1);
+            char *d = (char *)GlobalLock(g), *o = d;
+            memcpy(d, s, strlen(s) + 1);
+            while (*d) {                                    /* symbols drawn from Wingdings: no text form */
+                unsigned long k;
+                int u = ph_unit(d, 4, &k);
+                if (k) *o++ = '?';
+                else *o++ = d[0];
+                d += u;
+            }
+            *o = 0;
             GlobalUnlock(g);
             SetClipboardData(CF_TEXT, g);
         }
@@ -2505,12 +3412,15 @@ static void shell_open(const char *target)
     MessageBox(hwnd, msg, "mdview", MB_OK | MB_ICONINFORMATION);
 }
 
+static void toggle_details(int id);
+
 static void open_link(const char *url)
 {
     char path[MAX_PATH], *slash, *hash;
     DWORD attr;
 
     if (!*url) return;
+    if (!strncmp(url, "mdview:details:", 15)) { toggle_details(atoi(url + 15)); return; }
     if (url[0] == '#') { goto_anchor(url + 1); return; }
     if (!strstr(url, "://") && strncmp(url, "mailto:", 7) != 0) {
         /* a relative link: open Markdown files in this viewer */
@@ -2681,6 +3591,7 @@ static void update_view_menu(void)
     CheckMenuRadioItem(view_menu, ID_THEME_AUTO, ID_THEME_DARK, ID_THEME_AUTO + g_theme, MF_BYCOMMAND);
     CheckMenuItem(view_menu, ID_WIDTH, MF_BYCOMMAND | (g_limit_width ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(view_menu, ID_SMOOTH, MF_BYCOMMAND | (g_smooth ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(view_menu, ID_CONSOLAS, MF_BYCOMMAND | (g_consolas ? MF_CHECKED : MF_UNCHECKED));
 }
 
 static void set_theme(int t)
@@ -2691,6 +3602,16 @@ static void set_theme(int t)
     apply_window_theme();
     update_view_menu();
     relayout();                                 /* colours are baked into the laid-out items */
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+static void toggle_details(int id)
+{
+    int old = g_scroll;
+    if (id < 0 || id >= MAXDET) return;
+    det_open[id] = (char)!det_open[id];
+    layout_all(view_w);
+    set_scroll(old);
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -2746,7 +3667,7 @@ static void tip_show_for(int link)
     if (!tip || link == tip_link) return;
     SendMessage(tip, MD_TTM_ACTIVATE, FALSE, 0);        /* hides a visible tip and resets the delay */
     tip_link = link;
-    if (link > 0 && link <= nlinks) {
+    if (link > 0 && link <= nlinks && strncmp(links[link - 1], "mdview:", 7)) {
         MdToolInfo ti;
         strncpy(tip_buf, links[link - 1], sizeof(tip_buf) - 1);
         tip_buf[sizeof(tip_buf) - 1] = 0;
@@ -2907,7 +3828,7 @@ static void track_leave(void)
 
 static void copy_code(int box)
 {
-    const Block *b = &blocks[cboxes[box].blk];
+    const Block *b = cboxes[box].blk;
     int k;
     sb = NULL; sb_len = sb_cap = 0;
     sb_addn("", 0);
@@ -3223,6 +4144,19 @@ static void apply_zoom(void)
     if (!z || z == g_zoom) return;
     g_zoom = z;
     save_zoom();
+    fonts_clear();
+    layout_all(view_w);
+    g_scroll = (int)((double)old_scroll * doc_h / old_doc);
+    set_scroll(g_scroll);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+static void toggle_consolas(void)
+{
+    int old_doc = doc_h > 0 ? doc_h : 1, old_scroll = g_scroll;
+    g_consolas = !g_consolas;
+    save_setting("Consolas", g_consolas);
+    update_view_menu();
     fonts_clear();
     layout_all(view_w);
     g_scroll = (int)((double)old_scroll * doc_h / old_doc);
@@ -3711,6 +4645,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case ID_THEME_LIGHT: set_theme(1); break;
         case ID_THEME_DARK:  set_theme(2); break;
         case ID_WIDTH:   toggle_width(); break;
+        case ID_CONSOLAS: toggle_consolas(); break;
         case ID_SMOOTH:  g_smooth = !g_smooth; save_setting("Smooth", g_smooth); update_view_menu(); break;
         case ID_ZOOMIN:  set_zoom(zoom_now() + 10); break;
         case ID_ZOOMOUT: set_zoom(zoom_now() - 10); break;
@@ -3754,6 +4689,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (g_theme < 0 || g_theme > 2) g_theme = 0;
     g_limit_width = load_setting("LimitWidth", 0) != 0;
     g_smooth = load_setting("Smooth", 1) != 0;
+    g_consolas = load_setting("Consolas", 0) != 0;
     apply_palette();
     mdc =CreateCompatibleDC(sdc);
     backdc = CreateCompatibleDC(sdc);
@@ -3802,6 +4738,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     AppendMenu(view, MF_SEPARATOR, 0, NULL);
     AppendMenu(view, MF_STRING, ID_WIDTH, "Limit &line width");
     AppendMenu(view, MF_STRING, ID_SMOOTH, "&Smooth scrolling");
+    AppendMenu(view, MF_STRING, ID_CONSOLAS, "Use &Consolas for code");
     AppendMenu(view, MF_SEPARATOR, 0, NULL);
     AppendMenu(view, MF_STRING, ID_THEME_AUTO, "Theme: &Automatic");
     AppendMenu(view, MF_STRING, ID_THEME_LIGHT, "Theme: &Light");

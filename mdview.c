@@ -971,6 +971,7 @@ static int block_tag_at(const char *p)
     const char *nm = p + 1 + (p[1] == '/');
     while (k < 7 && isalnum((unsigned char)nm[k])) { name[k] = (char)tolower((unsigned char)nm[k]); k++; }
     name[k] = 0;
+    if (nm[k] != '>' && nm[k] != '/' && nm[k] != ' ' && nm[k] != '\t' && nm[k] != '\n' && nm[k]) return 0;     /* <p:sldIdLst> is no <p> */
     return !strcmp(name, "ul") || !strcmp(name, "ol") || !strcmp(name, "li") || !strcmp(name, "div") ||
            (name[0] == 'p' && !name[1]) || (name[0] == 'h' && name[1] >= '1' && name[1] <= '6' && !name[2]);
 }
@@ -995,8 +996,22 @@ static void parse_nested(Cell *c, char *md)
 static int has_block_tag(const char *text)
 {
     const char *p;
-    for (p = text; *p; p++)
-        if (*p == '<' && block_tag_at(p)) return 1;
+    for (p = text; *p; p++) {
+        if (*p == '`') {                                    /* tags inside a code span are text */
+            int n = 0, m;
+            const char *q;
+            while (p[n] == '`') n++;
+            for (q = p + n; *q; q += m) {
+                while (*q && *q != '`') q++;
+                for (m = 0; q[m] == '`'; m++) ;
+                if (m == n) { p = q + m - 1; break; }
+                if (!*q) break;
+            }
+            if (!*q) p += n - 1;
+        } else if (*p == '<' && block_tag_at(p)) {
+            return 1;
+        }
+    }
     return 0;
 }
 

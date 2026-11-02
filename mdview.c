@@ -1543,6 +1543,45 @@ static void parse_doc(char *text)
     free(f);
 }
 
+/* "mdview /dump in.md out.txt": write the parsed block structure (one token per block) and exit, to diff against another parser */
+static void dump_structure(const char *in, const char *out)
+{
+    FILE *f = fopen(in, "rb"), *o;
+    long size;
+    char *text;
+    int i;
+
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    text = (char *)malloc(size + 1);
+    size = (long)fread(text, 1, size, f);
+    text[size] = 0;
+    fclose(f);
+    free_doc();
+    parse_doc(text);
+    o = fopen(out, "wb");
+    if (o) {
+        for (i = 0; i < nblocks; i++) {
+            const Block *b = &blocks[i];
+            switch (b->kind) {
+            case BK_PARA:  fputs("P", o); break;
+            case BK_HEAD:  fprintf(o, "H%d", b->level); break;
+            case BK_LIST:  fprintf(o, "L%d", b->level); break;
+            case BK_QUOTE: fputs("Q", o); break;
+            case BK_CODE:  fputs("C", o); break;
+            case BK_TABLE: fputs("T", o); break;
+            case BK_RULE:  fputs("R", o); break;
+            default:       fputs("D", o); break;
+            }
+            fputc(10, o);
+        }
+        fclose(o);
+    }
+    free(text);
+}
+
 /* ---- fonts and metrics ---- */
 
 static HWND hwnd;
@@ -5032,6 +5071,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     {
         int n;
         while (*w == ' ') w++;
+        if (!strnicmp(w, "/dump ", 6)) {
+            char *sp = strchr(w + 6, ' ');
+            if (sp) { *sp = 0; dump_structure(w + 6, sp + 1); }
+            ExitProcess(0);
+        }
         if (!strnicmp(w, "/diag", 5)) { g_diag = 1; g_diag_layout = 1; w += 5; while (*w == ' ') w++; }
         if (*w == '"') w++;
         n = strlen(w);

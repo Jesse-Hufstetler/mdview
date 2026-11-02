@@ -617,6 +617,7 @@ static int pend_loose;                  /* the list item being collected follows
 static int pend_task;                   /* the list item being collected is a task: 1 open, 2 done */
 static int pend_hard;                   /* the last line of the paragraph ended with a hard break */
 static int ord_next[6];                 /* the number the next ordered item gets, per level (0 = start a new list) */
+static int lv_mark[8], lv_cont[8], lv_n;     /* marker and content columns of the open list items, outermost first */
 static int list_ind = -1, list_lvl;     /* content column and level of the latest list item */
 enum { P_NONE, P_PARA, P_QUOTE, P_LIST };
 
@@ -981,9 +982,10 @@ static void parse_nested(Cell *c, char *md)
 {
     Block *sb_blocks = blocks;
     int sb_n = nblocks, sb_cap = capblocks, sb_plen = pend_len, sb_kind = pend_kind, sb_ind = pend_indent;
-    int sb_inset = pend_inset, sb_lind = list_ind, sb_llvl = list_lvl;
+    int sb_inset = pend_inset, sb_lind = list_ind, sb_llvl = list_lvl, sb_lvn = lv_n, sb_lvm[8], sb_lvc[8];
     char *sb_pend = pend, sb_num[16];
     memcpy(sb_num, pend_num, sizeof(sb_num));
+    memcpy(sb_lvm, lv_mark, sizeof(sb_lvm)); memcpy(sb_lvc, lv_cont, sizeof(sb_lvc));
     blocks = NULL; nblocks = capblocks = 0;
     parse_doc_in(md);
     c->b = blocks; c->n = nblocks;
@@ -991,6 +993,7 @@ static void parse_nested(Cell *c, char *md)
     pend = sb_pend; pend_len = sb_plen; pend_kind = sb_kind; pend_indent = sb_ind;
     pend_inset = sb_inset; list_ind = sb_lind; list_lvl = sb_llvl;
     memcpy(pend_num, sb_num, sizeof(sb_num));
+    lv_n = sb_lvn; memcpy(lv_mark, sb_lvm, sizeof(sb_lvm)); memcpy(lv_cont, sb_lvc, sizeof(sb_lvc));
 }
 
 static int has_block_tag(const char *text)
@@ -1279,7 +1282,7 @@ static void parse_doc_in(char *text)
             if (e >= 0) { i = e; continue; }
         }
         if (pend_kind == P_NONE && ind >= (list_ind >= 0 ? list_ind : 4) && *t != '#' && *t != '|' && *t != '>' &&
-            !is_rule(t) && !list_item(t, num)) {
+            !is_rule(t) && (!list_item(t, num) || (list_ind < 0 && ind >= 4))) {   /* 4+ spaces outside a list is code, even when it looks like a bullet */
             if (ind >= (list_ind >= 0 ? list_ind : 0) + 4) {        /* indented code, also inside a list item */
                 int j = i, k, strip = (list_ind >= 0 ? list_ind : 0) + 4, last = i;
                 Block *b;
@@ -1420,9 +1423,22 @@ static void parse_doc_in(char *text)
                 item += item[3] ? 4 : 3;
             }
             pend_kind = P_LIST;
-            pend_indent = ind;
-            list_ind = ind + (int)(item - t);
-            list_lvl = ind / 2 > 5 ? 5 : ind / 2;
+            {   /* nest by the item's content column, like CommonMark: 4 spaces under a "- " is one level down, not two */
+                int lv, cont = ind + (int)(item - t);
+                if (list_ind < 0) lv_n = 0;
+                lv = lv_n;
+                while (lv > 0 && ind < lv_cont[lv - 1]) {
+                    if (ind >= lv_mark[lv - 1]) { lv--; break; }       /* a sibling of that item */
+                    lv--;
+                }
+                if (lv > 5) lv = 5;
+                lv_mark[lv] = ind;
+                lv_cont[lv] = cont;
+                lv_n = lv + 1;
+                pend_indent = lv * 2;
+                list_ind = cont;
+                list_lvl = lv;
+            }
             strcpy(pend_num, num);
             pend_len = 0;
             pend[0] = 0;

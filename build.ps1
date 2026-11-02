@@ -28,12 +28,10 @@ try {
     "#define VER_STR `"$($parts -join '.')`"`r`n#define VER_COMMA $($parts -join ',')`r`n" |
         Set-Content -Encoding ASCII version.h
 
-    if ($Name -ne "setup") { Build "mdview" }
-    if ($Name -ne "mdview") {
-        Build "setup"
-        $ver = ((Get-Content version.h | Select-String 'VER_STR "([^"]+)"').Matches[0].Groups[1].Value)
-        New-Item -ItemType Directory -Force dist | Out-Null
-        Copy-Item setup.exe "dist\mdview-setup-$ver.exe" -Force
-        "dist\mdview-setup-$ver.exe"
-    }
+    Build "mdview"
+    Build "setup"
+    $ver = ((Get-Content version.h | Select-String 'VER_STR "([^"]+)"').Matches[0].Groups[1].Value)
+    New-Item -ItemType Directory -Force dist | Out-Null
+    Copy-Item setup.exe "dist\mdview-setup-$ver.exe" -Force
+    "dist\mdview-setup-$ver.exe"
 } finally { Pop-Location }

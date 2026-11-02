@@ -788,6 +788,13 @@ static int has_pipe(const char *s)
     return 0;
 }
 
+static int ends_pipe(const char *s)
+{
+    const char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == 9 || e[-1] == 13)) e--;
+    return e > s && e[-1] == '|';
+}
+
 /* a table whose header row is followed by a delimiter row of the same width; pipes at the ends are optional */
 static int table_starts(char **lines, int i, int nl)
 {
@@ -1387,7 +1394,8 @@ static void parse_doc_in(char *text)
             new_block(BK_RULE);
             continue;
         }
-        if (table_starts(lines, i, nl) && (*t == '|' || pend_kind == P_NONE)) {
+        if (table_starts(lines, i, nl) && (*t == '|' || pend_kind == P_NONE) ||
+            *t == '|' && ends_pipe(t)) {            /* a headerless "| a | b |" row, which the front matter table relies on */
             int j = i, tin = (list_ind >= 0 && ind >= list_ind) ? list_lvl + 1 : 0;
             flush();
             if (!tin) list_ind = -1;
@@ -1931,6 +1939,14 @@ static int as_on, as_x, as_y, as_hbox = -1, as_ax, as_ay;   /* middle-click auto
 static DWORD as_t, as_t0;
 static int sb_drag = -1, sb_grab;                        /* a code block's scrollbar thumb being dragged */
 static int hot_box = -1, btn_hot, copied_box = -1;      /* box under the mouse, button hovered, box just copied */
+
+/* top of a code block's Copy button in document coordinates: it rides down the block while its top is scrolled off */
+static int btn_top(const CodeBox *cb)
+{
+    int off = cb->by - cb->y, top = g_scroll + off, last = cb->y + cb->h - cb->bh - off;
+    if (top > last) top = last;
+    return top > cb->by ? top : cb->by;
+}
 
 static CodeBox *add_cbox(int x, int y, int w, int h, const Block *blk)
 {
@@ -3374,7 +3390,7 @@ static void paint(HDC dc, const RECT *clip)
     }
     for (i = 0; i < ncboxes; i++) {                     /* Copy buttons, shown while a code block is hovered */
         CodeBox *cb = &cboxes[i];
-        int top = cb->by - g_scroll, hot = (i == hot_box && btn_hot);
+        int top = btn_top(cb) - g_scroll, hot = (i == hot_box && btn_hot);
         int done = (i == copied_box);
         RECT r;
         if ((i != hot_box && i != copied_box) || !cb->bw || top > view_h || top + cb->bh < 0) continue;   /* tables have no Copy button */
@@ -3889,7 +3905,7 @@ static int box_at(int x, int y)
 static int in_btn(int i, int x, int y)
 {
     y += g_scroll;
-    return x >= cboxes[i].bx && x < cboxes[i].bx + cboxes[i].bw && y >= cboxes[i].by && y < cboxes[i].by + cboxes[i].bh;
+    return x >= cboxes[i].bx && x < cboxes[i].bx + cboxes[i].bw && y >= btn_top(&cboxes[i]) && y < btn_top(&cboxes[i]) + cboxes[i].bh;
 }
 
 static void update_hover(void)

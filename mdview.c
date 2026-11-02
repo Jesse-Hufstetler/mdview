@@ -4490,7 +4490,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     if (msh_wheel && msg == msh_wheel) {         /* wp is the wheel delta, 120 per notch */
         int delta = (short)wp;
         if (GetKeyState(VK_CONTROL) < 0) set_zoom(zoom_now() + (delta > 0 ? 10 : -10));
-        else smooth_scroll(scroll_base() - delta * S(60) / 120);
+        else smooth_scroll(scroll_base() - delta * S(100) / 120);
         return 0;
     }
     switch (msg) {
@@ -4565,7 +4565,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         int delta = (short)HIWORD(wp);
         if ((LOWORD(wp) & MK_CONTROL) || GetKeyState(VK_CONTROL) < 0) set_zoom(zoom_now() + (delta > 0 ? 10 : -10));
         else if ((LOWORD(wp) & MK_SHIFT) && hwheel(lp, -delta * S(60) / 120)) { }
-        else smooth_scroll(scroll_base() - delta * S(60) / 120);
+        else smooth_scroll(scroll_base() - delta * S(100) / 120);
         return 0;
     }
     case 0x020E: {                              /* WM_MOUSEHWHEEL */

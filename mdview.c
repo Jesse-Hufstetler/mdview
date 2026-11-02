@@ -40,7 +40,7 @@
 enum { ID_OPEN = 1, ID_EXIT, ID_RELOAD, ID_COPY, ID_ZOOMIN, ID_ZOOMOUT, ID_ZOOM100, ID_ABOUT,
        ID_COPYALL, ID_SELALL, ID_PASTE,
        ID_THEME_AUTO, ID_THEME_LIGHT, ID_THEME_DARK, ID_CTX_OPEN, ID_CTX_COPYLINK, ID_CTX_COPYCODE, ID_WIDTH,
-       ID_FIND, ID_FINDNEXT, ID_FINDPREV, ID_FINDCLOSE, ID_FINDEDIT, ID_SMOOTH, ID_CONSOLAS };
+       ID_FIND, ID_FINDNEXT, ID_FINDPREV, ID_FINDCLOSE, ID_FINDEDIT, ID_SMOOTH, ID_CONSOLAS, ID_AUTORELOAD };
 
 /* ---- colours ---- */
 enum { P_TEXT, P_GRAY, P_HEAD, P_CODE, P_BLOCK, P_LINK, P_PAGE, P_INLINEBG, P_BLOCKBG, P_BLOCKBD,
@@ -76,7 +76,7 @@ static const COLORREF pal_dark[P_COUNT] = {
 #define C_GRID     pal[P_GRID]
 #define C_THEAD    pal[P_THEAD]
 #define C_ZEBRA    pal[P_ZEBRA]
-static int g_theme, g_dark, g_limit_width = 0, g_smooth = 1, g_consolas = 0;     /* theme: 0 follow the system, 1 light, 2 dark */
+static int g_theme, g_dark, g_limit_width = 0, g_smooth = 1, g_consolas = 0, g_autoreload = 1;     /* theme: 0 follow the system, 1 light, 2 dark */
 static HMENU view_menu;
 #define NOBACK     0xFFFFFFFFUL
 
@@ -3680,6 +3680,7 @@ static void update_view_menu(void)
     CheckMenuItem(view_menu, ID_WIDTH, MF_BYCOMMAND | (g_limit_width ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(view_menu, ID_SMOOTH, MF_BYCOMMAND | (g_smooth ? MF_CHECKED : MF_UNCHECKED));
     CheckMenuItem(view_menu, ID_CONSOLAS, MF_BYCOMMAND | (g_consolas ? MF_CHECKED : MF_UNCHECKED));
+    CheckMenuItem(view_menu, ID_AUTORELOAD, MF_BYCOMMAND | (g_autoreload ? MF_CHECKED : MF_UNCHECKED));
 }
 
 static void set_theme(int t)
@@ -4281,26 +4282,52 @@ static void show_text(char *text, const char *title)
     SetWindowText(hwnd, title);
 }
 
-static void load_file(const char *path)
+/* modified time + size of the open file, polled to notice edits (FindFirstFile works on Win95, GetFileAttributesEx doesn't) */
+typedef struct { DWORD lo, hi, size; } FileStamp;
+static FileStamp loaded_stamp, seen_stamp;
+
+static int file_stamp(const char *path, FileStamp *st)
 {
-    FILE *f = fopen(path, "rb");
+    WIN32_FIND_DATA fd;
+    HANDLE h = FindFirstFile(path, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    FindClose(h);
+    st->lo = fd.ftLastWriteTime.dwLowDateTime;
+    st->hi = fd.ftLastWriteTime.dwHighDateTime;
+    st->size = fd.nFileSizeLow;
+    return 1;
+}
+
+static int stamp_eq(const FileStamp *a, const FileStamp *b)
+{
+    return a->lo == b->lo && a->hi == b->hi && a->size == b->size;
+}
+
+/* reload = keep the scroll position and stay quiet if the file is momentarily unreadable (an editor mid-save) */
+static int load_file_ex(const char *path, int reload)
+{
+    FILE *f;
     long size;
     unsigned char *raw;
     char *text;
     char title[MAX_PATH + 32];
     const char *base;
+    FileStamp st;
+    int old_scroll = g_scroll;
 
+    if (!file_stamp(path, &st)) memset(&st, 0, sizeof(st));
+    f = fopen(path, "rb");
     if (!f) {
-        MessageBox(hwnd, "Can't open that file.", "mdview", MB_OK | MB_ICONEXCLAMATION);
-        return;
+        if (!reload) MessageBox(hwnd, "Can't open that file.", "mdview", MB_OK | MB_ICONEXCLAMATION);
+        return 0;
     }
     fseek(f, 0, SEEK_END);
     size = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (size > 8 * 1024 * 1024) {
         fclose(f);
-        MessageBox(hwnd, "File is too big (8 MB max).", "mdview", MB_OK | MB_ICONEXCLAMATION);
-        return;
+        if (!reload) MessageBox(hwnd, "File is too big (8 MB max).", "mdview", MB_OK | MB_ICONEXCLAMATION);
+        return 0;
     }
     raw = (unsigned char *)malloc(size + 1);
     size = (long)fread(raw, 1, size, f);
@@ -4319,6 +4346,24 @@ static void load_file(const char *path)
     show_text(text, title);
     free(text);
     SetCursor(cur_arrow);
+    loaded_stamp = seen_stamp = st;
+    if (reload) set_scroll(old_scroll);
+    return 1;
+}
+
+static void load_file(const char *path)
+{
+    load_file_ex(path, 0);
+}
+
+/* polled from a timer: reload once the file has changed and then held still for a poll (debounces editors that save in pieces) */
+static void autoreload_poll(void)
+{
+    FileStamp st;
+    if (!g_autoreload || !curfile[0] || !file_stamp(curfile, &st)) return;
+    if (stamp_eq(&st, &loaded_stamp)) { seen_stamp = st; return; }
+    if (!stamp_eq(&st, &seen_stamp)) { seen_stamp = st; return; }
+    load_file_ex(curfile, 1);
 }
 
 static void open_dialog(void)
@@ -4524,6 +4569,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
             }
             return 0;
         }
+        if (wp == 7) { autoreload_poll(); return 0; }
         if (wp == 3) { KillTimer(h, 3); apply_zoom(); return 0; }
         if (wp == 5) { anim_step(); return 0; }
         if (wp == 4) { KillTimer(h, 4); copied_box = -1; InvalidateRect(h, NULL, FALSE); return 0; }
@@ -4766,7 +4812,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         switch (LOWORD(wp)) {
         case ID_OPEN:    open_dialog(); break;
         case ID_EXIT:    DestroyWindow(h); break;
-        case ID_RELOAD:  if (curfile[0]) load_file(curfile); break;
+        case ID_RELOAD:  if (curfile[0]) load_file_ex(curfile, 1); break;
         case ID_COPY:    copy_text(0); break;
         case ID_COPYALL: copy_text(1); break;
         case ID_SELALL:  select_all(); InvalidateRect(h, NULL, FALSE); break;
@@ -4781,6 +4827,7 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         case ID_THEME_DARK:  set_theme(2); break;
         case ID_WIDTH:   toggle_width(); break;
         case ID_CONSOLAS: toggle_consolas(); break;
+        case ID_AUTORELOAD: g_autoreload = !g_autoreload; save_setting("AutoReload", g_autoreload); update_view_menu(); break;
         case ID_SMOOTH:  g_smooth = !g_smooth; save_setting("Smooth", g_smooth); update_view_menu(); break;
         case ID_ZOOMIN:  set_zoom(zoom_now() + 10); break;
         case ID_ZOOMOUT: set_zoom(zoom_now() - 10); break;
@@ -4865,6 +4912,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (g_theme < 0 || g_theme > 2) g_theme = 0;
     g_limit_width = load_setting("LimitWidth", 0) != 0;
     g_smooth = load_setting("Smooth", 1) != 0;
+    g_autoreload = load_setting("AutoReload", 1) != 0;
     g_consolas = load_setting("Consolas", 0) != 0;
     apply_palette();
     mdc =CreateCompatibleDC(sdc);
@@ -4915,6 +4963,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     AppendMenu(view, MF_STRING, ID_WIDTH, "Limit &line width");
     AppendMenu(view, MF_STRING, ID_SMOOTH, "&Smooth scrolling");
     AppendMenu(view, MF_STRING, ID_CONSOLAS, "Use &Consolas for code");
+    AppendMenu(view, MF_STRING, ID_AUTORELOAD, "&Reload when the file changes");
     AppendMenu(view, MF_SEPARATOR, 0, NULL);
     AppendMenu(view, MF_STRING, ID_THEME_AUTO, "Theme: &Automatic");
     AppendMenu(view, MF_STRING, ID_THEME_LIGHT, "Theme: &Light");
@@ -4930,6 +4979,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     hwnd = CreateWindow("MdViewWnd", "mdview", WS_OVERLAPPEDWINDOW | WS_VSCROLL,
                         CW_USEDEFAULT, CW_USEDEFAULT, MulDiv(800, g_dpi, 96), MulDiv(600, g_dpi, 96),
                         NULL, bar, inst, NULL);
+    SetTimer(hwnd, 7, 500, NULL);               /* watch the open file for edits */
     {   /* the window may open on a monitor whose DPI differs from the one the screen DC reports */
         UINT (WINAPI *wdpi)(HWND) = (UINT (WINAPI *)(HWND))GetProcAddress(GetModuleHandle("user32.dll"), "GetDpiForWindow");
         if (wdpi && wdpi(hwnd) >= 48) g_dpi = (int)wdpi(hwnd);

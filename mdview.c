@@ -4143,9 +4143,11 @@ static LRESULT CALLBACK find_edit_proc(HWND h, UINT m, WPARAM w, LPARAM l)
     return CallWindowProc(find_edit_old, h, m, w, l);
 }
 
+static void ui_font_update(void);
+
 static void find_show(void)
 {
-    HFONT gui = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    int fresh = !find_edit;
     if (!find_edit) {
         HINSTANCE inst = (HINSTANCE)GetWindowLong(hwnd, GWL_HINSTANCE);
         find_edit = CreateWindowEx(0, "EDIT", "", WS_CHILD | WS_BORDER | ES_AUTOHSCROLL, 0, 0, 10, 10,
@@ -4157,13 +4159,9 @@ static void find_show(void)
                                    hwnd, (HMENU)ID_FINDNEXT, inst, NULL);
         find_close = CreateWindowEx(0, "BUTTON", "x", WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0, 0, 10, 10,
                                     hwnd, (HMENU)ID_FINDCLOSE, inst, NULL);
-        SendMessage(find_edit, WM_SETFONT, (WPARAM)gui, 0);
-        SendMessage(find_count, WM_SETFONT, (WPARAM)gui, 0);
-        SendMessage(find_prev, WM_SETFONT, (WPARAM)gui, 0);
-        SendMessage(find_next, WM_SETFONT, (WPARAM)gui, 0);
-        SendMessage(find_close, WM_SETFONT, (WPARAM)gui, 0);
         find_edit_old = (WNDPROC)SetWindowLong(find_edit, GWL_WNDPROC, (LONG)find_edit_proc);
     }
+    if (fresh) ui_font_update();
     find_layout();
     find_visible = 1;
     ShowWindow(find_edit, SW_SHOW); ShowWindow(find_count, SW_SHOW); ShowWindow(find_prev, SW_SHOW);
@@ -4428,7 +4426,12 @@ static void draw_menubar_item(UahDrawItem *d)
     FillRect(d->um.hdc, &d->dis.rcItem, (d->dis.itemState & (ODS_HOTLIGHT | ODS_SELECTED)) ? br_barhot : br_bar);
     memset(&ncm, 0, sizeof(ncm));
     ncm.cbSize = sizeof(ncm);
-    SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    {   /* per-monitor aware processes get 96-dpi metrics from SystemParametersInfo, so ask for ours */
+        BOOL (WINAPI *spifd)(UINT, UINT, PVOID, UINT, UINT) =
+            (BOOL (WINAPI *)(UINT, UINT, PVOID, UINT, UINT))GetProcAddress(GetModuleHandle("user32.dll"), "SystemParametersInfoForDpi");
+        if (!spifd || !spifd(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, g_dpi))
+            SystemParametersInfo(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    }
     f = CreateFontIndirect(&ncm.lfMenuFont);
     of = SelectObject(d->um.hdc, f);
     SetBkMode(d->um.hdc, TRANSPARENT);
@@ -4436,6 +4439,47 @@ static void draw_menubar_item(UahDrawItem *d)
     DrawText(d->um.hdc, buf, -1, &d->dis.rcItem, flags);
     SelectObject(d->um.hdc, of);
     DeleteObject(f);
+}
+
+/* UI font for the find bar: the stock GUI font scaled to the current DPI */
+static HFONT ui_font;
+
+static void ui_font_update(void)
+{
+    LOGFONT lf;
+    HFONT nf;
+    GetObject(GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
+    lf.lfHeight = MulDiv(lf.lfHeight, g_dpi, 96);
+    lf.lfWidth = 0;
+    nf = CreateFontIndirect(&lf);
+    if (!nf) return;
+    if (find_edit) {
+        SendMessage(find_edit, WM_SETFONT, (WPARAM)nf, 0);
+        SendMessage(find_count, WM_SETFONT, (WPARAM)nf, 0);
+        SendMessage(find_prev, WM_SETFONT, (WPARAM)nf, 0);
+        SendMessage(find_next, WM_SETFONT, (WPARAM)nf, 0);
+        SendMessage(find_close, WM_SETFONT, (WPARAM)nf, 0);
+    }
+    if (ui_font) DeleteObject(ui_font);
+    ui_font = nf;
+}
+
+/* the window moved to a monitor with another DPI (or the scale changed): rescale everything DPI-derived */
+static void dpi_changed(int dpi, const RECT *rc)
+{
+    int old_doc = doc_h > 0 ? doc_h : 1, old_scroll = g_scroll;
+    if (dpi < 48) return;
+    g_dpi = dpi;
+    if (rc) SetWindowPos(hwnd, NULL, rc->left, rc->top, rc->right - rc->left, rc->bottom - rc->top,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+    ui_font_update();
+    if (tip) SendMessage(tip, MD_TTM_SETMAXTIPWIDTH, 0, MulDiv(520, g_dpi, 96));
+    fonts_clear();
+    layout_all(view_w);
+    g_scroll = (int)((double)old_scroll * doc_h / old_doc);
+    set_scroll(g_scroll);
+    find_layout();
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 static UINT msh_wheel;      /* the wheel message that Win9x IntelliPoint drivers send ("MSWHEEL_ROLLMSG") */
@@ -4450,6 +4494,9 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     switch (msg) {
+    case 0x02E0:                                /* WM_DPICHANGED */
+        dpi_changed(HIWORD(wp), (const RECT *)lp);
+        return 0;
     case WM_SIZE:
         view_w = LOWORD(lp);
         view_h = HIWORD(lp);
@@ -4753,6 +4800,42 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProc(h, msg, wp, lp);
 }
 
+/* A parent run under a "DPI unaware" compatibility override (Everything, say) passes it down in
+   __COMPAT_LAYER, which beats our manifest and gets the window bitmap-stretched. Start once more
+   without it; MDVIEW_RELAUNCHED stops a loop if the override is applied some other way. */
+static int undpi_relaunch(void)
+{
+    char layer[256], *env, *e, *blk, *o;
+    STARTUPINFO si;
+    PROCESS_INFORMATION pi;
+    int n = 0, ok;
+
+    if (GetEnvironmentVariable("MDVIEW_RELAUNCHED", layer, sizeof(layer))) return 0;
+    if (!GetEnvironmentVariable("__COMPAT_LAYER", layer, sizeof(layer))) return 0;
+    CharUpper(layer);
+    if (!strstr(layer, "DPIUNAWARE")) return 0;
+    env = GetEnvironmentStrings();
+    if (!env) return 0;
+    for (e = env; *e; e += strlen(e) + 1) n += (int)strlen(e) + 1;
+    blk = (char *)malloc(n + 32);
+    if (!blk) { FreeEnvironmentStrings(env); return 0; }
+    for (e = env, o = blk; *e; e += strlen(e) + 1) {
+        if (!_strnicmp(e, "__COMPAT_LAYER=", 15)) continue;
+        strcpy(o, e); o += strlen(e) + 1;
+    }
+    strcpy(o, "MDVIEW_RELAUNCHED=1"); o += 20;
+    *o = 0;
+    FreeEnvironmentStrings(env);
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    ok = CreateProcess(NULL, GetCommandLine(), NULL, NULL, FALSE, 0, blk, NULL, &si, &pi);
+    free(blk);
+    if (!ok) return 0;
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return 1;
+}
+
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     WNDCLASSEX wc;
@@ -4764,8 +4847,13 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     HDC sdc;
     FARPROC dpiaware;
 
-    dpiaware = GetProcAddress(GetModuleHandle("user32.dll"), "SetProcessDPIAware");
-    if (dpiaware) dpiaware();            /* crisp text on scaled displays (absent on Win9x) */
+    if (undpi_relaunch()) return 0;
+    dpiaware = GetProcAddress(GetModuleHandle("user32.dll"), "SetProcessDpiAwarenessContext");
+    if (dpiaware) ((BOOL (WINAPI *)(HANDLE))dpiaware)((HANDLE)-4);     /* per-monitor v2 (Win10 1703+) */
+    else {
+        dpiaware = GetProcAddress(GetModuleHandle("user32.dll"), "SetProcessDPIAware");
+        if (dpiaware) dpiaware();        /* crisp text on scaled displays (absent on Win9x) */
+    }
 
     sdc = GetDC(NULL);
     g_dpi = GetDeviceCaps(sdc, LOGPIXELSY);
@@ -4842,6 +4930,10 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     hwnd = CreateWindow("MdViewWnd", "mdview", WS_OVERLAPPEDWINDOW | WS_VSCROLL,
                         CW_USEDEFAULT, CW_USEDEFAULT, MulDiv(800, g_dpi, 96), MulDiv(600, g_dpi, 96),
                         NULL, bar, inst, NULL);
+    {   /* the window may open on a monitor whose DPI differs from the one the screen DC reports */
+        UINT (WINAPI *wdpi)(HWND) = (UINT (WINAPI *)(HWND))GetProcAddress(GetModuleHandle("user32.dll"), "GetDpiForWindow");
+        if (wdpi && wdpi(hwnd) >= 48) g_dpi = (int)wdpi(hwnd);
+    }
     DragAcceptFiles(hwnd, TRUE);
     apply_window_theme();
     update_view_menu();

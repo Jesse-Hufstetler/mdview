@@ -549,6 +549,23 @@ static void parse_ex(Inline *out, const char *s, unsigned base, int link)
                 if (!closing && !strcmp(name, "br")) {
                     FLUSH();
                     html_break(out);
+                } else if (!closing && !strcmp(name, "img")) {     /* <img alt=".."> shows like ![alt](..) */
+                    const char *q, *alt = NULL;
+                    char label[300];
+                    int l, alen = 0;
+                    for (q = p + 1; q < gt && !alt; q++)
+                        if ((q[-1] == ' ' || q[-1] == 9 || q[-1] == 10) && !strnicmp(q, "alt=", 4)) {
+                            alt = q + 4;
+                            if (*alt == '"' || *alt == 39) {
+                                char qc = *alt++;
+                                while (alt + alen < gt && alt[alen] != qc) alen++;
+                            } else {
+                                while (alt + alen < gt && alt[alen] != ' ' && alt[alen] != '/') alen++;
+                            }
+                        }
+                    FLUSH();
+                    l = alen ? sprintf(label, "[image: %.*s]", alen > 250 ? 250 : alen, alt) : sprintf(label, "[image]");
+                    add_span(out, label, l, F_IMG | F_ITAL, 0);
                 } else {
                     unsigned bit = 0;
                     if (!strcmp(name, "u") || !strcmp(name, "ins")) bit = F_UL;
@@ -1128,6 +1145,16 @@ static int html_block(char **lines, int i, int nl)
         Block *b;
         memcpy(inner, body, (size_t)(close - body));
         inner[close - body] = 0;
+        {   /* the tags' own indentation is layout, not an indented code block */
+            char *rd = inner, *wr = inner;
+            int bol = 1;
+            for (; *rd; rd++) {
+                if (bol && (*rd == ' ' || *rd == 9)) continue;
+                bol = *rd == 10;
+                *wr++ = *rd;
+            }
+            *wr = 0;
+        }
         if (details) {
             const char *sp = NULL, *q, *sgt, *sc;
             char *sum, *rest;

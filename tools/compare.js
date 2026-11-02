@@ -37,6 +37,7 @@ for (const f of files) {
   const tmp = path.join(os.tmpdir(), "mdview_dump.txt");
   try { fs.unlinkSync(tmp); } catch (e) {}
   execFileSync(exe, ["/dump", f, tmp]);
+  if (!fs.existsSync(tmp)) { bad++; console.log(`CRASH ${f}`); continue; }
   const mine = fs.readFileSync(tmp, "utf8").split("\n").filter(Boolean).filter(x => x !== "D");
   const ref = mdIt(fs.readFileSync(f, "utf8"));
   let i = 0;

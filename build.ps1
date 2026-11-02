@@ -11,7 +11,7 @@ $env:INCLUDE = "$wat\h;$wat\h\nt"
 $env:LIB = "$wat\lib386;$wat\lib386\nt"
 
 function Build($n) {
-    wcl386 -zq -bt=nt -3s -ox "$n.c" "-fe=$n.exe" "-l=nt"
+    wcl386 -zq -bt=nt -3s -ox "$n.c" "-fe=$n.exe" "-l=nt_win"
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     wrc -q -bt=nt -r "-i=$wat\h;$wat\h\nt" "$n.rc"          # icon + version info
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

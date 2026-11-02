@@ -1308,8 +1308,13 @@ static void parse_doc_in(char *text)
             int e = html_block(lines, i, nl);
             if (e >= 0) { i = e; continue; }
         }
-        if (pend_kind == P_NONE && ind >= (list_ind >= 0 ? list_ind : 4) && *t != '#' && *t != '|' && *t != '>' &&
-            !is_rule(t) && (!list_item(t, num) || (list_ind < 0 && ind >= 4))) {   /* 4+ spaces outside a list is code, even when it looks like a bullet */
+        if (pend_kind == P_NONE && list_ind >= 0 && ind < list_ind && !list_item(t, num)) {
+            int hk = lv_n - 1;              /* text indented less than the newest item belongs to the nearest enclosing one */
+            while (hk >= 0 && ind < lv_cont[hk]) hk--;
+            if (hk >= 0) { lv_n = hk + 1; list_ind = lv_cont[hk]; list_lvl = hk; }
+        }
+        if (pend_kind == P_NONE && ((list_ind < 0 && ind >= 4) ||      /* 4+ spaces outside a list is code, whatever it starts with */
+            (list_ind >= 0 && ind >= list_ind && *t != '#' && *t != '|' && *t != '>' && !is_rule(t) && !list_item(t, num)))) {   /* 4+ spaces outside a list is code, even when it looks like a bullet */
             if (ind >= (list_ind >= 0 ? list_ind : 0) + 4) {        /* indented code, also inside a list item */
                 int j = i, k, strip = (list_ind >= 0 ? list_ind : 0) + 4, last = i;
                 Block *b;
@@ -1382,7 +1387,7 @@ static void parse_doc_in(char *text)
             new_block(BK_RULE);
             continue;
         }
-        if (*t == '|' || (pend_kind == P_NONE && table_starts(lines, i, nl))) {
+        if (table_starts(lines, i, nl) && (*t == '|' || pend_kind == P_NONE)) {
             int j = i, tin = (list_ind >= 0 && ind >= list_ind) ? list_lvl + 1 : 0;
             flush();
             if (!tin) list_ind = -1;

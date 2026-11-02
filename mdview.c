@@ -1431,12 +1431,85 @@ static void parse_doc_in(char *text)
     free(lines);
 }
 
+/* YAML front matter ("---" ... "---" at the very top) becomes a two-column table of key | value, like VS Code's preview;
+   indented lines under a key are joined into its value as code. Returns NULL when the file has none. */
+static char *front_matter(const char *text)
+{
+    Buf o;
+    const char *p, *end = NULL, *q;
+    int rows = 0, open = 0;
+    if (strncmp(text, "---", 3)) return NULL;
+    for (p = text + 3; *p == ' ' || *p == '\r'; p++) ;
+    if (*p != '\n') return NULL;
+    for (q = p + 1; *q; ) {                                 /* the closing delimiter line */
+        const char *e = strchr(q, '\n');
+        if (!strncmp(q, "---", 3) || !strncmp(q, "...", 3)) {
+            const char *r = q + 3;
+            while (*r == ' ' || *r == '\r') r++;
+            if (!*r || *r == '\n') { end = r; break; }
+        }
+        if (!e) break;
+        q = e + 1;
+    }
+    if (!end) return NULL;
+    memset(&o, 0, sizeof(o));
+    for (p++; p < q; ) {
+        const char *eol = strchr(p, '\n'), *s = p, *c;
+        int ll = (int)(eol - p), ind = *p == ' ' || *p == '\t';
+        while (ll > 0 && (p[ll - 1] == '\r' || p[ll - 1] == ' ')) ll--;
+        p = eol + 1;
+        if (!ll) continue;
+        if (!ind && (c = (const char *)memchr(s, ':', ll)) != NULL && c > s && (c + 1 == s + ll || c[1] == ' ')) {
+            const char *v = c + 1, *ve = s + ll;
+            while (v < ve && *v == ' ') v++;
+            if (v + 1 < ve && (*v == '"' || *v == '\'') && ve[-1] == *v) { v++; ve--; }
+            if (open) { if (o.s[o.n - 1] == ' ') o.n--; buf_add(&o, "` |\n", 4); }
+            buf_add(&o, "| **", 4);
+            buf_add(&o, s, (int)(c - s));
+            buf_add(&o, "** | ", 5);
+            for (; v < ve; v++) {
+                if (*v == '|') buf_add(&o, "\\", 1);
+                buf_add(&o, v, 1);
+            }
+            open = 0;
+            if (c + 1 == s + ll) { buf_add(&o, "`", 1); open = 1; }   /* children follow, shown as code */
+            else buf_add(&o, " |\n", 3);
+            rows++;
+        } else if (rows && ind) {
+            const char *ve = s + ll;
+            while (s < ve && (*s == ' ' || *s == '\t')) s++;
+            if (!open) {                                    /* a value that carried text and then children */
+                o.n -= 3;
+                buf_add(&o, " `", 2);
+                open = 1;
+            } else if (o.s[o.n - 1] != '`') {
+                buf_add(&o, " ", 1);
+            }
+            for (; s < ve; s++) {
+                if (*s == '|') buf_add(&o, "\\", 1);
+                buf_add(&o, s, 1);
+            }
+            buf_add(&o, " ", 1);
+        } else {
+            free(o.s);
+            return NULL;                                    /* not key: value lines, so not front matter */
+        }
+    }
+    if (open) { if (o.s[o.n - 1] == ' ') o.n--; buf_add(&o, "` |\n", 4); }
+    if (!rows) { free(o.s); return NULL; }
+    buf_add(&o, "\n", 1);
+    buf_add(&o, end, (int)strlen(end));
+    buf_add(&o, "", 1);
+    return o.s;
+}
+
 static void parse_doc(char *text)
 {
-    char *c = html_lists(text);
+    char *f = front_matter(text), *c = html_lists(f ? f : text);
     ndet = 0;
-    parse_doc_in(c ? c : text);
+    parse_doc_in(c ? c : f ? f : text);
     free(c);
+    free(f);
 }
 
 /* ---- fonts and metrics ---- */
